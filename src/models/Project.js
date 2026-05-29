@@ -46,6 +46,7 @@ module.exports = (sequelize) => {
       tenant_id: { type: DataTypes.UUID, allowNull: false },
       client_id: { type: DataTypes.UUID, allowNull: false },
       folder_id: { type: DataTypes.UUID, allowNull: true },
+      workspace_sort_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
       name: {
         type: DataTypes.STRING(200),
         allowNull: false,

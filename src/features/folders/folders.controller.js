@@ -49,4 +49,10 @@ const moveProject = catchAsync(async (req, res) => {
   return sendSuccess(res, project);
 });
 
-module.exports = { list, tree, contents, create, update, remove, moveProject };
+const reorderWorkspace = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const treeData = await foldersService.reorderWorkspace(req.body, ctx);
+  return sendSuccess(res, treeData);
+});
+
+module.exports = { list, tree, contents, create, update, remove, moveProject, reorderWorkspace };

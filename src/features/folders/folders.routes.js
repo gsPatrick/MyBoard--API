@@ -9,6 +9,7 @@ router.use(...requireAuth);
 
 router.get("/tree", foldersController.tree);
 router.get("/", foldersController.list);
+router.post("/workspace/reorder", authorize("admin", "developer"), foldersController.reorderWorkspace);
 router.post("/", authorize("admin", "developer"), foldersController.create);
 router.get("/:id/contents", foldersController.contents);
 router.patch("/:id", authorize("admin", "developer"), foldersController.update);

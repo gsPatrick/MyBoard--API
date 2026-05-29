@@ -93,6 +93,7 @@ async function getFolderContents(folderId, query = {}, ctx) {
       where: projectWhere,
       include: [{ model: Client, as: "client", attributes: ["id", "name"] }],
       order: [
+        ["workspace_sort_order", "ASC"],
         ["importance_level", "DESC"],
         ["name", "ASC"],
       ],
@@ -157,7 +158,10 @@ async function getWorkspaceTree(query = {}, ctx) {
 
   const rootProjects = await Project.findAll({
     where: rootProjectsWhere,
-    order: [["name", "ASC"]],
+    order: [
+      ["workspace_sort_order", "ASC"],
+      ["name", "ASC"],
+    ],
   });
 
   return {
@@ -304,6 +308,94 @@ async function moveProjectToFolder(projectId, folderId, ctx) {
   return project;
 }
 
+function collectDescendantFolderIds(folderId, foldersByParent) {
+  const ids = [];
+  const queue = [folderId];
+
+  while (queue.length) {
+    const current = queue.shift();
+    const children = foldersByParent.get(current) || [];
+    children.forEach((child) => {
+      ids.push(child.id);
+      queue.push(child.id);
+    });
+  }
+
+  return ids;
+}
+
+async function reorderWorkspace(payload = {}, ctx) {
+  const folderUpdates = Array.isArray(payload.folders) ? payload.folders : [];
+  const projectUpdates = Array.isArray(payload.projects) ? payload.projects : [];
+
+  if (folderUpdates.length === 0 && projectUpdates.length === 0) {
+    throw new AppError("Nenhuma alteração de ordem informada", 400, "VALIDATION_ERROR");
+  }
+
+  const tenantWhere = applyTenantFilter({}, ctx);
+  const allFolders = await WorkspaceFolder.findAll({ where: tenantWhere, attributes: ["id", "parent_id"] });
+  const foldersByParent = new Map();
+
+  allFolders.forEach((folder) => {
+    const key = folder.parent_id || "root";
+    if (!foldersByParent.has(key)) foldersByParent.set(key, []);
+    foldersByParent.get(key).push(folder);
+  });
+
+  for (const item of folderUpdates) {
+    if (!item?.id) {
+      throw new AppError("folder.id é obrigatório", 400, "VALIDATION_ERROR");
+    }
+
+    const folder = await WorkspaceFolder.findByPk(item.id);
+    assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
+
+    const parentId = item.parent_id || null;
+
+    if (parentId === item.id) {
+      throw new AppError("Uma pasta não pode ser pai de si mesma", 400, "VALIDATION_ERROR");
+    }
+
+    if (parentId) {
+      const parent = await WorkspaceFolder.findByPk(parentId);
+      assertResourceTenant(parent, ctx, "FOLDER_NOT_FOUND");
+
+      const descendants = collectDescendantFolderIds(item.id, foldersByParent);
+      if (descendants.includes(parentId)) {
+        throw new AppError("Não é possível mover pasta para dentro de uma subpasta", 400, "CYCLE_ERROR");
+      }
+    }
+
+    await folder.update({
+      parent_id: parentId,
+      sort_order: Number.isFinite(Number(item.sort_order)) ? Number(item.sort_order) : 0,
+    });
+  }
+
+  for (const item of projectUpdates) {
+    if (!item?.id) {
+      throw new AppError("project.id é obrigatório", 400, "VALIDATION_ERROR");
+    }
+
+    const project = await Project.findByPk(item.id);
+    assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
+
+    const folderId = item.folder_id || null;
+
+    if (folderId) {
+      const folder = await WorkspaceFolder.findByPk(folderId);
+      assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
+    }
+
+    await project.update({
+      folder_id: folderId,
+      workspace_sort_order: Number.isFinite(Number(item.sort_order)) ? Number(item.sort_order) : 0,
+    });
+  }
+
+  return getWorkspaceTree({}, ctx);
+}
+
 async function deleteFolder(id, ctx) {
   const folder = await WorkspaceFolder.findByPk(id);
   assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
@@ -329,5 +421,6 @@ module.exports = {
   createFolder,
   updateFolder,
   moveProjectToFolder,
+  reorderWorkspace,
   deleteFolder,
 };
