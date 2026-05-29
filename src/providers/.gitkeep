@@ -1,0 +1,5 @@
+# Providers
+
+Integrações externas ficam aqui (ex.: GitHub API, e-mail, filas).
+
+Nenhum provider implementado ainda — detalhes de GitHub são armazenados como JSON em `project_details`.

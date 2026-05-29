@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log
+.env
+.env.local
+uploads/*
+!uploads/.gitkeep
+.git
+.gitignore
+*.md
+!README.md
+.dockerignore
+coverage
+.DS_Store
