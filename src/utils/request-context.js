@@ -26,9 +26,15 @@ function resolveTenantIdForWrite(ctx, payloadTenantId = null) {
 }
 
 function applyTenantFilter(where, ctx) {
-  if (ctx.tenantId) {
-    where.tenant_id = ctx.tenantId;
+  if (ctx.isSuperAdmin && !ctx.tenantId) {
+    return where;
   }
+
+  if (!ctx.tenantId) {
+    throw new AppError("Tenant não vinculado ao usuário", 403, "TENANT_FORBIDDEN");
+  }
+
+  where.tenant_id = ctx.tenantId;
   return where;
 }
 
@@ -41,7 +47,11 @@ function assertResourceTenant(resource, ctx, notFoundCode = "NOT_FOUND") {
     return resource;
   }
 
-  if (ctx.tenantId && resource.tenant_id !== ctx.tenantId) {
+  if (!ctx.tenantId) {
+    throw new AppError("Tenant não vinculado ao usuário", 403, "TENANT_FORBIDDEN");
+  }
+
+  if (resource.tenant_id !== ctx.tenantId) {
     throw new AppError("Acesso negado a este recurso", 403, "TENANT_FORBIDDEN");
   }
 
