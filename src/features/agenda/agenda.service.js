@@ -4,6 +4,7 @@ const AppError = require("../../utils/app-error");
 const { AGENDA_STATUSES, NOTIFICATION_EVENTS, APP_TIMEZONE } = require("../../config/constants");
 const { parseLocalDateTime, formatAgendaEvent, getDateRangeForAgendaQuery } = require("../../utils/datetime");
 const notificationsService = require("../notifications/notifications.service");
+const activitiesService = require("../activities/activities.service");
 const {
   applyTenantFilter,
   resolveTenantIdForWrite,
@@ -118,6 +119,14 @@ async function createEvent(payload, ctx) {
       entityType: "agenda_event",
       entityId: event.id,
       payload: { agendaEventId: event.id },
+    });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId,
+      actionType: NOTIFICATION_EVENTS.AGENDA_CREATED,
+      title: `Agendou ${event.title}.`,
+      entityType: "agenda_event",
+      entityId: event.id,
     });
   }
 

@@ -16,6 +16,11 @@ module.exports = (sequelize) => {
         as: "notifications",
       });
 
+      User.hasMany(models.UserActivity, {
+        foreignKey: "user_id",
+        as: "activities",
+      });
+
       User.hasMany(models.MediaFile, {
         foreignKey: "uploaded_by_user_id",
         as: "uploads",

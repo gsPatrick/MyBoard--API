@@ -4,6 +4,7 @@ const AppError = require("../../utils/app-error");
 const { CLIENT_STATUSES, IMPORTANCE_LEVELS, NOTIFICATION_EVENTS } = require("../../config/constants");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
+const activitiesService = require("../activities/activities.service");
 const {
   applyTenantFilter,
   resolveTenantIdForWrite,
@@ -122,6 +123,14 @@ async function createClient(payload, ctx) {
       entityType: "client",
       entityId: client.id,
     });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId,
+      actionType: NOTIFICATION_EVENTS.CLIENT_CREATED,
+      title: `Criou o cliente ${client.name}.`,
+      entityType: "client",
+      entityId: client.id,
+    });
   }
 
   return getClientById(client.id, ctx);
@@ -155,6 +164,17 @@ async function updateClient(id, payload, ctx) {
 
   if (payload.tag_ids !== undefined) {
     await tagsService.syncClientTags(client.id, payload.tag_ids, ctx);
+  }
+
+  if (ctx.userId) {
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId: client.tenant_id,
+      actionType: NOTIFICATION_EVENTS.CLIENT_UPDATED,
+      title: `Atualizou o cliente ${client.name}.`,
+      entityType: "client",
+      entityId: client.id,
+    });
   }
 
   return getClientById(client.id, ctx);

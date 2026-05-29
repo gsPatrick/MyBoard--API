@@ -3,6 +3,7 @@ const AppError = require("../../utils/app-error");
 const { MEDIA_ENTITY_TYPES, MEDIA_KINDS, ALLOWED_MIME_TYPES, NOTIFICATION_EVENTS } = require("../../config/constants");
 const localStorage = require("../../providers/storage/local-storage.provider");
 const notificationsService = require("../notifications/notifications.service");
+const activitiesService = require("../activities/activities.service");
 const { assertResourceTenant } = require("../../utils/request-context");
 
 const ENTITY_MODEL_MAP = {
@@ -78,12 +79,22 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", ctx
   }
 
   if (ctx?.userId) {
+    const tenantId = entity?.tenant_id || ctx.tenantId || null;
     await notificationsService.createAndEmit({
       userId: ctx.userId,
-      tenantId: entity?.tenant_id || ctx.tenantId || null,
+      tenantId,
       eventType: NOTIFICATION_EVENTS.MEDIA_UPLOADED,
       title: "Upload concluído",
       message: `Arquivo "${file.originalname}" enviado`,
+      entityType,
+      entityId,
+      payload: { mediaId: media.id },
+    });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId,
+      actionType: NOTIFICATION_EVENTS.MEDIA_UPLOADED,
+      title: `Enviou o arquivo ${file.originalname}.`,
       entityType,
       entityId,
       payload: { mediaId: media.id },

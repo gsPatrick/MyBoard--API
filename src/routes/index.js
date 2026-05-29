@@ -8,6 +8,7 @@ const tagsRoutes = require("../features/tags/tags.routes");
 const mediaRoutes = require("../features/media/media.routes");
 const agendaRoutes = require("../features/agenda/agenda.routes");
 const notificationsRoutes = require("../features/notifications/notifications.routes");
+const activitiesRoutes = require("../features/activities/activities.routes");
 const usersRoutes = require("../features/users/users.routes");
 const { APP_TIMEZONE } = require("../config/constants");
 
@@ -35,6 +36,7 @@ router.use("/v1/tags", tagsRoutes);
 router.use("/v1/media", mediaRoutes);
 router.use("/v1/agenda", agendaRoutes);
 router.use("/v1/notifications", notificationsRoutes);
+router.use("/v1/activities", activitiesRoutes);
 router.use("/v1/users", usersRoutes);
 
 module.exports = router;

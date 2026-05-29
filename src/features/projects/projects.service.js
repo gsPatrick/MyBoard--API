@@ -11,6 +11,7 @@ const {
 const projectDetailsService = require("../project-details/project-details.service");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
+const activitiesService = require("../activities/activities.service");
 const {
   applyTenantFilter,
   resolveTenantIdForWrite,
@@ -94,7 +95,19 @@ async function ensureUniqueSlug(baseSlug, excludeId = null) {
 }
 
 const projectIncludes = [
-  { model: Client, as: "client", attributes: ["id", "name", "company"] },
+  {
+    model: Client,
+    as: "client",
+    attributes: ["id", "name", "company"],
+    include: [
+      {
+        model: MediaFile,
+        as: "avatar",
+        required: false,
+        attributes: ["id", "public_url", "storage_path"],
+      },
+    ],
+  },
   { model: WorkspaceFolder, as: "folder", attributes: ["id", "name", "slug", "color", "icon"] },
   { model: Tag, as: "tags", through: { attributes: [] } },
   { model: MediaFile, as: "cover", required: false },
@@ -222,6 +235,14 @@ async function createProject(payload, ctx) {
       entityType: "project",
       entityId: project.id,
     });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId,
+      actionType: NOTIFICATION_EVENTS.PROJECT_CREATED,
+      title: `Criou o projeto ${project.name}.`,
+      entityType: "project",
+      entityId: project.id,
+    });
   }
 
   return getProjectById(project.id, {}, ctx);
@@ -278,13 +299,16 @@ async function updateProject(id, payload, ctx) {
   }
 
   const previousFolderId = project.folder_id;
+  const folderMoved =
+    payload.folder_id !== undefined && payload.folder_id !== previousFolderId;
+
   await project.update(updates);
 
   if (payload.tag_ids !== undefined) {
     await tagsService.syncProjectTags(project.id, payload.tag_ids, ctx);
   }
 
-  if (ctx.userId && payload.folder_id !== undefined && payload.folder_id !== previousFolderId) {
+  if (ctx.userId && folderMoved) {
     await notificationsService.createAndEmit({
       userId: ctx.userId,
       tenantId: project.tenant_id,
@@ -294,6 +318,30 @@ async function updateProject(id, payload, ctx) {
       entityType: "project",
       entityId: project.id,
       payload: { folderId: payload.folder_id },
+    });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId: project.tenant_id,
+      actionType: NOTIFICATION_EVENTS.PROJECT_MOVED,
+      title: `Moveu o projeto ${project.name}.`,
+      entityType: "project",
+      entityId: project.id,
+      payload: { folderId: payload.folder_id },
+    });
+  }
+
+  const hasOtherUpdates =
+    Object.keys(updates).length > 0 &&
+    !(Object.keys(updates).length === 1 && folderMoved && updates.folder_id !== undefined);
+
+  if (ctx.userId && hasOtherUpdates) {
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId: project.tenant_id,
+      actionType: NOTIFICATION_EVENTS.PROJECT_UPDATED,
+      title: `Atualizou o projeto ${project.name}.`,
+      entityType: "project",
+      entityId: project.id,
     });
   }
 

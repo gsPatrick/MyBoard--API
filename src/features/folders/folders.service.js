@@ -3,6 +3,7 @@ const { WorkspaceFolder, Project, Client } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { slugify } = require("../../utils/crypto");
 const notificationsService = require("../notifications/notifications.service");
+const activitiesService = require("../activities/activities.service");
 const { NOTIFICATION_EVENTS } = require("../../config/constants");
 const {
   applyTenantFilter,
@@ -217,6 +218,14 @@ async function createFolder(payload, ctx) {
       entityId: folder.id,
       payload: { folderId: folder.id },
     });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId,
+      actionType: NOTIFICATION_EVENTS.FOLDER_CREATED,
+      title: `Criou a pasta ${folder.name}.`,
+      entityType: "folder",
+      entityId: folder.id,
+    });
   }
 
   return folder;
@@ -277,6 +286,15 @@ async function moveProjectToFolder(projectId, folderId, ctx) {
       eventType: NOTIFICATION_EVENTS.PROJECT_MOVED,
       title: "Projeto movido",
       message: `"${project.name}" foi movido para ${folderId ? "uma pasta" : "a raiz"}`,
+      entityType: "project",
+      entityId: project.id,
+      payload: { projectId: project.id, folderId },
+    });
+    await activitiesService.recordActivity({
+      userId: ctx.userId,
+      tenantId: project.tenant_id,
+      actionType: NOTIFICATION_EVENTS.PROJECT_MOVED,
+      title: `Moveu o projeto ${project.name}.`,
       entityType: "project",
       entityId: project.id,
       payload: { projectId: project.id, folderId },
