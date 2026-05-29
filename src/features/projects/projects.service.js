@@ -130,7 +130,13 @@ async function listProjects(query = {}, ctx) {
   });
 
   return {
-    items: rows,
+    items: rows.map((row) => {
+      const json = row.toJSON();
+      return {
+        ...json,
+        created_at: json.created_at || json.createdAt || null,
+      };
+    }),
     meta: { page, limit, total: count, totalPages: Math.ceil(count / limit) || 1 },
   };
 }
