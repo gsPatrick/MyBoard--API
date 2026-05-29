@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const { Op } = require("sequelize");
-const { User, Tenant, PasswordResetToken, sequelize } = require("../../models");
+const { User, Tenant, PasswordResetToken, MediaFile, sequelize } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { slugify } = require("../../utils/crypto");
 const { signAccessToken, getResetExpiresAt } = require("../../utils/jwt");
@@ -33,6 +33,11 @@ async function ensureUniqueEmail(email, tenantId = null) {
 function sanitizeUser(user) {
   return user?.toSafeJSON ? user.toSafeJSON() : user;
 }
+
+const USER_ME_INCLUDE = [
+  { model: Tenant, as: "tenant", required: false },
+  { model: MediaFile, as: "avatar", required: false },
+];
 
 async function register(payload) {
   const name = payload.name?.trim();
@@ -169,12 +174,61 @@ async function login(payload) {
 
 async function me(userId) {
   const user = await User.findByPk(userId, {
-    include: [{ model: Tenant, as: "tenant", required: false }],
+    include: USER_ME_INCLUDE,
   });
 
   if (!user) {
     throw new AppError("Usuário não encontrado", 404, "USER_NOT_FOUND");
   }
+
+  return {
+    user: sanitizeUser(user),
+    tenant: user.tenant ? user.tenant.toJSON() : null,
+  };
+}
+
+async function updateProfile(userId, payload) {
+  const user = await User.findByPk(userId, {
+    include: USER_ME_INCLUDE,
+  });
+
+  if (!user) {
+    throw new AppError("Usuário não encontrado", 404, "USER_NOT_FOUND");
+  }
+
+  if (payload.name !== undefined) {
+    const name = payload.name?.trim();
+    if (!name) {
+      throw new AppError("Nome é obrigatório", 400, "VALIDATION_ERROR");
+    }
+    user.name = name;
+  }
+
+  if (payload.email !== undefined) {
+    const email = payload.email?.trim().toLowerCase();
+    if (!email) {
+      throw new AppError("E-mail é obrigatório", 400, "VALIDATION_ERROR");
+    }
+
+    const duplicateWhere = {
+      email,
+      id: { [Op.ne]: userId },
+    };
+
+    if (user.tenant_id) {
+      duplicateWhere.tenant_id = user.tenant_id;
+    }
+
+    const duplicate = await User.findOne({ where: duplicateWhere });
+    if (duplicate) {
+      throw new AppError("E-mail já cadastrado", 409, "EMAIL_EXISTS");
+    }
+
+    user.email = email;
+  }
+
+  await user.save();
+  await user.reload({ include: USER_ME_INCLUDE });
 
   return {
     user: sanitizeUser(user),
@@ -284,6 +338,7 @@ module.exports = {
   register,
   login,
   me,
+  updateProfile,
   forgotPassword,
   resetPassword,
   changePassword,
