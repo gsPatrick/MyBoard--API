@@ -10,6 +10,7 @@ const agendaRoutes = require("../features/agenda/agenda.routes");
 const notificationsRoutes = require("../features/notifications/notifications.routes");
 const activitiesRoutes = require("../features/activities/activities.routes");
 const usersRoutes = require("../features/users/users.routes");
+const financeRoutes = require("../features/finance/finance.routes");
 const { APP_TIMEZONE } = require("../config/constants");
 
 const router = Router();
@@ -38,5 +39,6 @@ router.use("/v1/agenda", agendaRoutes);
 router.use("/v1/notifications", notificationsRoutes);
 router.use("/v1/activities", activitiesRoutes);
 router.use("/v1/users", usersRoutes);
+router.use("/v1/finance", financeRoutes);
 
 module.exports = router;

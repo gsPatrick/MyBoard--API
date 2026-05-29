@@ -38,6 +38,15 @@ module.exports = {
 
   DEMAND_STATUSES: ["pending", "in_progress", "done", "cancelled"],
 
+  FINANCIAL_ENTRY_TYPES: [
+    "entrada",
+    "adiantamento",
+    "sprint",
+    "parcela",
+    "final",
+    "outro",
+  ],
+
   NOTIFICATION_EVENTS: {
     CLIENT_CREATED: "client.created",
     CLIENT_UPDATED: "client.updated",

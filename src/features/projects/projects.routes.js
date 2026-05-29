@@ -4,6 +4,7 @@ const authorize = require("../../middlewares/authorize");
 const projectsController = require("./projects.controller");
 const projectDetailsRoutes = require("../project-details/project-details.routes");
 const projectDemandsRoutes = require("../project-demands/project-demands.routes");
+const projectFinancialRoutes = require("../project-financial/project-financial.routes");
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.delete("/:id", authorize("admin"), projectsController.remove);
 
 router.use("/:projectId/details", projectDetailsRoutes);
 router.use("/:projectId/demands", projectDemandsRoutes);
+router.use("/:projectId/financial-entries", projectFinancialRoutes);
 
 module.exports = router;

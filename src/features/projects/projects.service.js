@@ -98,7 +98,7 @@ const projectIncludes = [
   {
     model: Client,
     as: "client",
-    attributes: ["id", "name", "company"],
+    attributes: ["id", "name", "company", "email", "phone"],
     include: [
       {
         model: MediaFile,
