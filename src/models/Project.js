@@ -1,5 +1,10 @@
 const { Model, DataTypes } = require("sequelize");
-const { PROJECT_STATUSES, PROJECT_PRIORITIES, IMPORTANCE_LEVELS } = require("../config/constants");
+const {
+  PROJECT_STATUSES,
+  PROJECT_PRIORITIES,
+  IMPORTANCE_LEVELS,
+  PROJECT_ORIGINS,
+} = require("../config/constants");
 
 module.exports = (sequelize) => {
   class Project extends Model {
@@ -92,6 +97,11 @@ module.exports = (sequelize) => {
       start_date: { type: DataTypes.DATEONLY, allowNull: true },
       due_date: { type: DataTypes.DATEONLY, allowNull: true },
       budget: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+      origin: {
+        type: DataTypes.ENUM(...PROJECT_ORIGINS),
+        allowNull: false,
+        defaultValue: "own",
+      },
     },
     {
       sequelize,

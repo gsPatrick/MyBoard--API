@@ -50,6 +50,16 @@ module.exports = (sequelize) => {
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       is_hidden: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       avatar_media_id: { type: DataTypes.UUID, allowNull: true },
+      onboarding: {
+        type: DataTypes.JSONB,
+        allowNull: false,
+        defaultValue: {
+          status: "pending",
+          step: 0,
+          version: 1,
+          completed_at: null,
+        },
+      },
     },
     {
       sequelize,

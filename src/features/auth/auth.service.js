@@ -7,6 +7,32 @@ const { slugify } = require("../../utils/crypto");
 const { signAccessToken, getResetExpiresAt } = require("../../utils/jwt");
 const emailProvider = require("../../providers/email/email.provider");
 const tagsService = require("../tags/tags.service");
+const {
+  ONBOARDING_STATUSES,
+  ONBOARDING_VERSION,
+} = require("../../config/constants");
+
+function defaultOnboarding() {
+  return {
+    status: "pending",
+    step: 0,
+    version: ONBOARDING_VERSION,
+    completed_at: null,
+  };
+}
+
+function normalizeOnboarding(value) {
+  if (!value || typeof value !== "object") {
+    return defaultOnboarding();
+  }
+
+  return {
+    status: ONBOARDING_STATUSES.includes(value.status) ? value.status : "pending",
+    step: Number.isFinite(Number(value.step)) ? Math.max(0, Number(value.step)) : 0,
+    version: ONBOARDING_VERSION,
+    completed_at: value.completed_at || null,
+  };
+}
 
 async function ensureUniqueTenantSlug(baseSlug) {
   let slug = baseSlug;
@@ -31,7 +57,11 @@ async function ensureUniqueEmail(email, tenantId = null) {
 }
 
 function sanitizeUser(user) {
-  return user?.toSafeJSON ? user.toSafeJSON() : user;
+  const json = user?.toSafeJSON ? user.toSafeJSON() : user;
+  if (!json) return json;
+  delete json.password_hash;
+  json.onboarding = normalizeOnboarding(json.onboarding);
+  return json;
 }
 
 const USER_ME_INCLUDE = [
@@ -236,6 +266,56 @@ async function updateProfile(userId, payload) {
   };
 }
 
+async function updateOnboarding(userId, payload) {
+  const user = await User.findByPk(userId, {
+    include: USER_ME_INCLUDE,
+  });
+
+  if (!user) {
+    throw new AppError("Usuário não encontrado", 404, "USER_NOT_FOUND");
+  }
+
+  const current = normalizeOnboarding(user.onboarding);
+  const next = { ...current };
+
+  if (payload.status !== undefined) {
+    if (!ONBOARDING_STATUSES.includes(payload.status)) {
+      throw new AppError("Status de onboarding inválido", 400, "VALIDATION_ERROR");
+    }
+    next.status = payload.status;
+
+    if (payload.status === "completed" || payload.status === "skipped") {
+      next.completed_at = new Date().toISOString();
+    }
+
+    if (payload.status === "in_progress") {
+      next.completed_at = null;
+    }
+  }
+
+  if (payload.step !== undefined) {
+    const step = Number(payload.step);
+    if (!Number.isFinite(step) || step < 0) {
+      throw new AppError("Passo de onboarding inválido", 400, "VALIDATION_ERROR");
+    }
+    next.step = Math.floor(step);
+
+    if (next.status === "pending") {
+      next.status = "in_progress";
+    }
+  }
+
+  next.version = ONBOARDING_VERSION;
+  user.onboarding = next;
+  await user.save();
+  await user.reload({ include: USER_ME_INCLUDE });
+
+  return {
+    user: sanitizeUser(user),
+    tenant: user.tenant ? user.tenant.toJSON() : null,
+  };
+}
+
 async function forgotPassword(payload) {
   const email = payload.email?.trim().toLowerCase();
   if (!email) {
@@ -339,6 +419,7 @@ module.exports = {
   login,
   me,
   updateProfile,
+  updateOnboarding,
   forgotPassword,
   resetPassword,
   changePassword,

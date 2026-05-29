@@ -6,6 +6,7 @@ const {
   PROJECT_STATUSES,
   PROJECT_PRIORITIES,
   IMPORTANCE_LEVELS,
+  PROJECT_ORIGINS,
   NOTIFICATION_EVENTS,
 } = require("../../config/constants");
 const projectDetailsService = require("../project-details/project-details.service");
@@ -204,6 +205,11 @@ async function createProject(payload, ctx) {
 
   const deadline = resolveDeadline(payload);
 
+  const origin = payload.origin || "own";
+  if (!PROJECT_ORIGINS.includes(origin)) {
+    throw new AppError("Origem do projeto inválida", 400, "VALIDATION_ERROR");
+  }
+
   const project = await Project.create({
     tenant_id: tenantId,
     client_id: payload.client_id,
@@ -297,6 +303,9 @@ async function updateProject(id, payload, ctx) {
   }
   if (updates.importance_level && !IMPORTANCE_LEVELS.includes(updates.importance_level)) {
     throw new AppError("importance_level inválido", 400, "VALIDATION_ERROR");
+  }
+  if (updates.origin && !PROJECT_ORIGINS.includes(updates.origin)) {
+    throw new AppError("Origem do projeto inválida", 400, "VALIDATION_ERROR");
   }
 
   if (payload.slug !== undefined || payload.name !== undefined) {

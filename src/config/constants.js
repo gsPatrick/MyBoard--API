@@ -14,6 +14,12 @@ module.exports = {
     paused: "Pausado",
   },
   PROJECT_PRIORITIES: ["low", "medium", "high", "critical"],
+  PROJECT_ORIGINS: ["own", "99freelas", "workana"],
+  PROJECT_ORIGIN_LABELS: {
+    own: "Próprio",
+    "99freelas": "99Freelas",
+    workana: "Workana",
+  },
 
   DETAIL_CATEGORIES: [
     "github",
@@ -33,6 +39,9 @@ module.exports = {
   STORAGE_DISKS: ["local", "s3"],
 
   USER_ROLES: ["super_admin", "admin", "developer", "viewer"],
+
+  ONBOARDING_VERSION: 1,
+  ONBOARDING_STATUSES: ["pending", "in_progress", "completed", "skipped"],
 
   AGENDA_STATUSES: ["scheduled", "completed", "cancelled"],
 

@@ -22,6 +22,11 @@ const updateProfile = catchAsync(async (req, res) => {
   return sendSuccess(res, result);
 });
 
+const updateOnboarding = catchAsync(async (req, res) => {
+  const result = await authService.updateOnboarding(req.user.id, req.body);
+  return sendSuccess(res, result);
+});
+
 const forgotPassword = catchAsync(async (req, res) => {
   const result = await authService.forgotPassword(req.body);
   return sendSuccess(res, result);
@@ -42,6 +47,7 @@ module.exports = {
   login,
   me,
   updateProfile,
+  updateOnboarding,
   forgotPassword,
   resetPassword,
   changePassword,
