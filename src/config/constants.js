@@ -36,6 +36,8 @@ module.exports = {
 
   AGENDA_STATUSES: ["scheduled", "completed", "cancelled"],
 
+  DEMAND_STATUSES: ["pending", "in_progress", "done", "cancelled"],
+
   NOTIFICATION_EVENTS: {
     CLIENT_CREATED: "client.created",
     CLIENT_UPDATED: "client.updated",
