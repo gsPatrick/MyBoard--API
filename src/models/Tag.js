@@ -4,6 +4,8 @@ const { TAG_SCOPES } = require("../config/constants");
 module.exports = (sequelize) => {
   class Tag extends Model {
     static associate(models) {
+      Tag.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       Tag.belongsToMany(models.Client, {
         through: models.ClientTag,
         foreignKey: "tag_id",
@@ -23,8 +25,9 @@ module.exports = (sequelize) => {
   Tag.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: true },
       name: { type: DataTypes.STRING(80), allowNull: false },
-      slug: { type: DataTypes.STRING(100), allowNull: false, unique: true },
+      slug: { type: DataTypes.STRING(100), allowNull: false },
       color: { type: DataTypes.STRING(20), allowNull: true, defaultValue: "#6366f1" },
       scope: { type: DataTypes.ENUM(...TAG_SCOPES), allowNull: false, defaultValue: "both" },
       importance_weight: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },

@@ -11,6 +11,11 @@ const {
 const projectDetailsService = require("../project-details/project-details.service");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
+const {
+  applyTenantFilter,
+  resolveTenantIdForWrite,
+  assertResourceTenant,
+} = require("../../utils/request-context");
 
 const STATUS_ALIASES = {
   active: "in_progress",
@@ -44,8 +49,8 @@ function resolveDeadline(payload, existing = {}) {
   return { has_deadline: true, due_date: dueDate };
 }
 
-function buildWhere(filters = {}) {
-  const where = {};
+function buildWhere(filters = {}, ctx) {
+  const where = applyTenantFilter({}, ctx);
 
   if (filters.client_id) where.client_id = filters.client_id;
   if (filters.folder_id === "null") where.folder_id = null;
@@ -95,13 +100,13 @@ const projectIncludes = [
   { model: MediaFile, as: "cover", required: false },
 ];
 
-async function listProjects(query = {}) {
+async function listProjects(query = {}, ctx) {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
   const offset = (page - 1) * limit;
 
   const { rows, count } = await Project.findAndCountAll({
-    where: buildWhere(query),
+    where: buildWhere(query, ctx),
     include: projectIncludes,
     order: [
       ["importance_level", "DESC"],
@@ -117,7 +122,7 @@ async function listProjects(query = {}) {
   };
 }
 
-async function getProjectById(id, options = {}) {
+async function getProjectById(id, options = {}, ctx) {
   const includeDetails = options.includeDetails !== false;
 
   const project = await Project.findByPk(id, {
@@ -141,6 +146,8 @@ async function getProjectById(id, options = {}) {
     throw new AppError("Projeto não encontrado", 404, "PROJECT_NOT_FOUND");
   }
 
+  assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
+
   if (includeDetails && project.details) {
     project.details = projectDetailsService.sanitizeDetailsForResponse(project.details);
   }
@@ -148,7 +155,7 @@ async function getProjectById(id, options = {}) {
   return project;
 }
 
-async function createProject(payload, notifyUserId = null) {
+async function createProject(payload, ctx) {
   if (!payload.name?.trim()) {
     throw new AppError("Nome do projeto é obrigatório", 400, "VALIDATION_ERROR");
   }
@@ -156,8 +163,12 @@ async function createProject(payload, notifyUserId = null) {
     throw new AppError("client_id é obrigatório", 400, "VALIDATION_ERROR");
   }
 
+  const tenantId = resolveTenantIdForWrite(ctx, payload.tenant_id);
+
   const client = await Client.findByPk(payload.client_id);
-  if (!client) throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
+  if (!client || client.tenant_id !== tenantId) {
+    throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
+  }
 
   if (payload.folder_id) {
     const folder = await WorkspaceFolder.findByPk(payload.folder_id);
@@ -175,6 +186,7 @@ async function createProject(payload, notifyUserId = null) {
   const deadline = resolveDeadline(payload);
 
   const project = await Project.create({
+    tenant_id: tenantId,
     client_id: payload.client_id,
     folder_id: payload.folder_id || null,
     name: payload.name.trim(),
@@ -193,16 +205,17 @@ async function createProject(payload, notifyUserId = null) {
   });
 
   if (Array.isArray(payload.details) && payload.details.length > 0) {
-    await projectDetailsService.bulkCreateDetails(project.id, payload.details);
+    await projectDetailsService.bulkCreateDetails(project.id, payload.details, ctx);
   }
 
   if (payload.tag_ids) {
-    await tagsService.syncProjectTags(project.id, payload.tag_ids);
+    await tagsService.syncProjectTags(project.id, payload.tag_ids, ctx);
   }
 
-  if (notifyUserId) {
+  if (ctx.userId) {
     await notificationsService.createAndEmit({
-      userId: notifyUserId,
+      userId: ctx.userId,
+      tenantId,
       eventType: NOTIFICATION_EVENTS.PROJECT_CREATED,
       title: "Novo projeto",
       message: `Projeto "${project.name}" criado`,
@@ -211,12 +224,12 @@ async function createProject(payload, notifyUserId = null) {
     });
   }
 
-  return getProjectById(project.id);
+  return getProjectById(project.id, {}, ctx);
 }
 
-async function updateProject(id, payload, notifyUserId = null) {
+async function updateProject(id, payload, ctx) {
   const project = await Project.findByPk(id);
-  if (!project) throw new AppError("Projeto não encontrado", 404, "PROJECT_NOT_FOUND");
+  assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
 
   if (payload.client_id) {
     const client = await Client.findByPk(payload.client_id);
@@ -268,12 +281,13 @@ async function updateProject(id, payload, notifyUserId = null) {
   await project.update(updates);
 
   if (payload.tag_ids !== undefined) {
-    await tagsService.syncProjectTags(project.id, payload.tag_ids);
+    await tagsService.syncProjectTags(project.id, payload.tag_ids, ctx);
   }
 
-  if (notifyUserId && payload.folder_id !== undefined && payload.folder_id !== previousFolderId) {
+  if (ctx.userId && payload.folder_id !== undefined && payload.folder_id !== previousFolderId) {
     await notificationsService.createAndEmit({
-      userId: notifyUserId,
+      userId: ctx.userId,
+      tenantId: project.tenant_id,
       eventType: NOTIFICATION_EVENTS.PROJECT_MOVED,
       title: "Projeto movido",
       message: `"${project.name}" foi movido`,
@@ -283,12 +297,12 @@ async function updateProject(id, payload, notifyUserId = null) {
     });
   }
 
-  return getProjectById(project.id);
+  return getProjectById(project.id, {}, ctx);
 }
 
-async function deleteProject(id) {
+async function deleteProject(id, ctx) {
   const project = await Project.findByPk(id);
-  if (!project) throw new AppError("Projeto não encontrado", 404, "PROJECT_NOT_FOUND");
+  assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
   await project.destroy();
 }
 

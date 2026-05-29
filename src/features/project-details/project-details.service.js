@@ -2,6 +2,7 @@ const { Project, ProjectDetail } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { encryptSecret, decryptSecret } = require("../../utils/crypto");
 const { DETAIL_CATEGORIES, DETAIL_VALUE_TYPES } = require("../../config/constants");
+const { assertResourceTenant } = require("../../utils/request-context");
 
 function normalizeKey(key) {
   return String(key)
@@ -89,16 +90,14 @@ function sanitizeDetailsForResponse(details, options = {}) {
   return details.map((detail) => sanitizeDetailForResponse(detail, options));
 }
 
-async function ensureProjectExists(projectId) {
+async function ensureProjectExists(projectId, ctx) {
   const project = await Project.findByPk(projectId);
-  if (!project) {
-    throw new AppError("Projeto não encontrado", 404, "PROJECT_NOT_FOUND");
-  }
+  assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
   return project;
 }
 
-async function listDetails(projectId, query = {}) {
-  await ensureProjectExists(projectId);
+async function listDetails(projectId, query = {}, ctx) {
+  await ensureProjectExists(projectId, ctx);
 
   const where = { project_id: projectId };
   if (query.category && DETAIL_CATEGORIES.includes(query.category)) {
@@ -118,8 +117,8 @@ async function listDetails(projectId, query = {}) {
   return sanitizeDetailsForResponse(details, { revealSecrets });
 }
 
-async function getDetailById(projectId, detailId, options = {}) {
-  await ensureProjectExists(projectId);
+async function getDetailById(projectId, detailId, options = {}, ctx) {
+  await ensureProjectExists(projectId, ctx);
 
   const detail = await ProjectDetail.findOne({
     where: { id: detailId, project_id: projectId },
@@ -134,8 +133,8 @@ async function getDetailById(projectId, detailId, options = {}) {
   });
 }
 
-async function createDetail(projectId, payload) {
-  await ensureProjectExists(projectId);
+async function createDetail(projectId, payload, ctx) {
+  await ensureProjectExists(projectId, ctx);
   validateDetailPayload(payload);
 
   const key = normalizeKey(payload.key);
@@ -159,15 +158,16 @@ async function createDetail(projectId, payload) {
   return sanitizeDetailForResponse(detail);
 }
 
-async function bulkCreateDetails(projectId, items = []) {
+async function bulkCreateDetails(projectId, items = [], ctx) {
   const results = [];
   for (const item of items) {
-    results.push(await createDetail(projectId, item));
+    results.push(await createDetail(projectId, item, ctx));
   }
   return results;
 }
 
-async function updateDetail(projectId, detailId, payload) {
+async function updateDetail(projectId, detailId, payload, ctx) {
+  await ensureProjectExists(projectId, ctx);
   const detail = await ProjectDetail.findOne({
     where: { id: detailId, project_id: projectId },
   });
@@ -219,7 +219,8 @@ async function updateDetail(projectId, detailId, payload) {
   return sanitizeDetailForResponse(detail);
 }
 
-async function deleteDetail(projectId, detailId) {
+async function deleteDetail(projectId, detailId, ctx) {
+  await ensureProjectExists(projectId, ctx);
   const detail = await ProjectDetail.findOne({
     where: { id: detailId, project_id: projectId },
   });
@@ -231,8 +232,8 @@ async function deleteDetail(projectId, detailId) {
   await detail.destroy();
 }
 
-async function getDetailsGroupedByCategory(projectId, options = {}) {
-  const details = await listDetails(projectId, options);
+async function getDetailsGroupedByCategory(projectId, options = {}, ctx) {
+  const details = await listDetails(projectId, options, ctx);
   return details.reduce((acc, detail) => {
     if (!acc[detail.category]) acc[detail.category] = [];
     acc[detail.category].push(detail);

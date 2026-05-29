@@ -3,6 +3,8 @@ const { Model, DataTypes } = require("sequelize");
 module.exports = (sequelize) => {
   class WorkspaceFolder extends Model {
     static associate(models) {
+      WorkspaceFolder.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       WorkspaceFolder.belongsTo(models.WorkspaceFolder, {
         foreignKey: "parent_id",
         as: "parent",
@@ -28,6 +30,7 @@ module.exports = (sequelize) => {
   WorkspaceFolder.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: false },
       parent_id: { type: DataTypes.UUID, allowNull: true },
       client_id: { type: DataTypes.UUID, allowNull: true },
       name: { type: DataTypes.STRING(200), allowNull: false },

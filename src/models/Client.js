@@ -4,6 +4,8 @@ const { CLIENT_STATUSES, IMPORTANCE_LEVELS } = require("../config/constants");
 module.exports = (sequelize) => {
   class Client extends Model {
     static associate(models) {
+      Client.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       Client.hasMany(models.Project, {
         foreignKey: "client_id",
         as: "projects",
@@ -40,6 +42,7 @@ module.exports = (sequelize) => {
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true,
       },
+      tenant_id: { type: DataTypes.UUID, allowNull: false },
       name: {
         type: DataTypes.STRING(200),
         allowNull: false,

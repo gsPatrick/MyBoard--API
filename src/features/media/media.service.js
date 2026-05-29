@@ -3,6 +3,7 @@ const AppError = require("../../utils/app-error");
 const { MEDIA_ENTITY_TYPES, MEDIA_KINDS, ALLOWED_MIME_TYPES, NOTIFICATION_EVENTS } = require("../../config/constants");
 const localStorage = require("../../providers/storage/local-storage.provider");
 const notificationsService = require("../notifications/notifications.service");
+const { assertResourceTenant } = require("../../utils/request-context");
 
 const ENTITY_MODEL_MAP = {
   client: Client,
@@ -10,7 +11,7 @@ const ENTITY_MODEL_MAP = {
   user: User,
 };
 
-async function ensureEntityExists(entityType, entityId) {
+async function ensureEntityExists(entityType, entityId, ctx) {
   if (!MEDIA_ENTITY_TYPES.includes(entityType)) {
     throw new AppError("entity_type inválido", 400, "VALIDATION_ERROR");
   }
@@ -23,14 +24,11 @@ async function ensureEntityExists(entityType, entityId) {
   if (!Model) return true;
 
   const entity = await Model.findByPk(entityId);
-  if (!entity) {
-    throw new AppError(`${entityType} não encontrado`, 404, "ENTITY_NOT_FOUND");
-  }
-
+  assertResourceTenant(entity, ctx, "ENTITY_NOT_FOUND");
   return entity;
 }
 
-async function uploadFile({ file, entityType, entityId, kind = "attachment", uploadedByUserId = null }) {
+async function uploadFile({ file, entityType, entityId, kind = "attachment", ctx }) {
   if (!file) {
     throw new AppError("Arquivo é obrigatório", 400, "VALIDATION_ERROR");
   }
@@ -43,7 +41,7 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", upl
     throw new AppError("kind inválido", 400, "VALIDATION_ERROR");
   }
 
-  await ensureEntityExists(entityType, entityId);
+  const entity = await ensureEntityExists(entityType, entityId, ctx);
 
   const stored = await localStorage.saveLocalFile({
     file,
@@ -63,7 +61,7 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", upl
     storage_disk: stored.storage_disk,
     storage_path: stored.storage_path,
     public_url: stored.public_url,
-    uploaded_by_user_id: uploadedByUserId,
+    uploaded_by_user_id: ctx?.userId || null,
     metadata: {},
   });
 
@@ -79,9 +77,10 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", upl
     await Project.update({ cover_media_id: media.id }, { where: { id: entityId } });
   }
 
-  if (uploadedByUserId) {
+  if (ctx?.userId) {
     await notificationsService.createAndEmit({
-      userId: uploadedByUserId,
+      userId: ctx.userId,
+      tenantId: entity?.tenant_id || ctx.tenantId || null,
       eventType: NOTIFICATION_EVENTS.MEDIA_UPLOADED,
       title: "Upload concluído",
       message: `Arquivo "${file.originalname}" enviado`,
@@ -94,7 +93,9 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", upl
   return media;
 }
 
-async function listMedia(entityType, entityId, query = {}) {
+async function listMedia(entityType, entityId, query = {}, ctx) {
+  await ensureEntityExists(entityType, entityId, ctx);
+
   const where = { entity_type: entityType, entity_id: entityId };
   if (query.kind && MEDIA_KINDS.includes(query.kind)) {
     where.kind = query.kind;
@@ -106,16 +107,21 @@ async function listMedia(entityType, entityId, query = {}) {
   });
 }
 
-async function getMediaById(id) {
+async function getMediaById(id, ctx) {
   const media = await MediaFile.findByPk(id);
   if (!media) {
     throw new AppError("Arquivo não encontrado", 404, "MEDIA_NOT_FOUND");
   }
+
+  if (ctx && media.entity_type !== "user") {
+    await ensureEntityExists(media.entity_type, media.entity_id, ctx);
+  }
+
   return media;
 }
 
-async function deleteMedia(id) {
-  const media = await getMediaById(id);
+async function deleteMedia(id, ctx) {
+  const media = await getMediaById(id, ctx);
 
   if (media.storage_disk === "local") {
     await localStorage.deleteLocalFile(media.storage_path);

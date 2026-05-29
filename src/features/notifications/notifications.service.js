@@ -1,8 +1,9 @@
 const { emitToUser, emitBroadcast } = require("../../providers/realtime/socket.provider");
 const { Notification } = require("../../models");
 
-async function createAndEmit({ userId, eventType, title, message, payload, entityType, entityId, broadcast = false }) {
+async function createAndEmit({ userId, tenantId, eventType, title, message, payload, entityType, entityId, broadcast = false }) {
   const notification = await Notification.create({
+    tenant_id: tenantId || null,
     user_id: userId,
     event_type: eventType,
     title,

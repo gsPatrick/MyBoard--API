@@ -9,29 +9,32 @@ async function seedAdmin() {
 
   await sequelize.authenticate();
 
-  const existing = await User.findOne({ where: { email } });
+  const existing = await User.scope("withPassword").findOne({
+    where: { email, tenant_id: null },
+  });
   const passwordHash = await bcrypt.hash(password, 10);
 
   if (!existing) {
     await User.create({
+      tenant_id: null,
       name,
       email,
       password_hash: passwordHash,
-      role: "admin",
+      role: "super_admin",
       is_active: true,
       is_hidden: false,
     });
-    console.log(`Usuário admin criado: ${email}`);
+    console.log(`Super admin criado: ${email}`);
     return;
   }
 
-  if (!existing.password_hash) {
-    await existing.update({ password_hash: passwordHash, role: "admin" });
-    console.log(`Senha do admin atualizada: ${email}`);
-    return;
-  }
-
-  console.log(`Usuário admin já existe: ${email}`);
+  await existing.update({
+    password_hash: passwordHash,
+    role: "super_admin",
+    tenant_id: null,
+    is_active: true,
+  });
+  console.log(`Super admin atualizado: ${email}`);
 }
 
 seedAdmin()

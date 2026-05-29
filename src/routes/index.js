@@ -1,4 +1,6 @@
 const { Router } = require("express");
+const authRoutes = require("../features/auth/auth.routes");
+const adminRoutes = require("../features/admin/admin.routes");
 const clientsRoutes = require("../features/clients/clients.routes");
 const projectsRoutes = require("../features/projects/projects.routes");
 const foldersRoutes = require("../features/folders/folders.routes");
@@ -17,12 +19,15 @@ router.get("/ping", (_req, res) => {
     data: {
       message: "pong",
       version: "v1",
+      saas: true,
       timezone: APP_TIMEZONE,
       timestamp: new Date().toISOString(),
     },
   });
 });
 
+router.use("/v1/auth", authRoutes);
+router.use("/v1/admin", adminRoutes);
 router.use("/v1/clients", clientsRoutes);
 router.use("/v1/projects", projectsRoutes);
 router.use("/v1/folders", foldersRoutes);

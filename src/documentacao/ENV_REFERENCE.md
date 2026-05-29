@@ -14,7 +14,17 @@
 | `DB_MAINTENANCE_DATABASE` | Não | `postgres` | DB para CREATE DATABASE |
 | `DB_LOGGING` | Não | `false` | Log SQL |
 | `CREDENTIALS_ENCRYPTION_KEY` | Sim (prod) | — | Criptografia de secrets |
-| `SEED_ADMIN_EMAIL` | Não | `patrickgsiqueira@hotmail.com` | Email do admin inicial |
+| `JWT_SECRET` | Sim (prod) | `change-me-in-production` | Assinatura dos tokens JWT |
+| `JWT_EXPIRES_IN` | Não | `7d` | Expiração do access token |
+| `JWT_RESET_EXPIRES_IN` | Não | `1h` | Expiração do token de reset |
+| `APP_URL` | Não | `http://localhost:3000` | URL do frontend (links de e-mail) |
+| `SMTP_HOST` | Não | — | Servidor SMTP (opcional) |
+| `SMTP_PORT` | Não | `587` | Porta SMTP |
+| `SMTP_SECURE` | Não | `false` | TLS direto (porta 465) |
+| `SMTP_USER` | Não | — | Usuário SMTP |
+| `SMTP_PASS` | Não | — | Senha SMTP |
+| `SMTP_FROM` | Não | — | Remetente dos e-mails |
+| `SEED_ADMIN_EMAIL` | Não | `patrickgsiqueira@hotmail.com` | Email do super admin |
 | `SEED_ADMIN_PASSWORD` | Não | — | Senha do admin inicial |
 | `SEED_ADMIN_NAME` | Não | `Patrick Gomes` | Nome do admin |
 | `UPLOAD_DIR` | Não | `./uploads` | Pasta de uploads |

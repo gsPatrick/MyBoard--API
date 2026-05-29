@@ -4,6 +4,7 @@ const { AGENDA_STATUSES, APP_TIMEZONE } = require("../config/constants");
 module.exports = (sequelize) => {
   class AgendaEvent extends Model {
     static associate(models) {
+      AgendaEvent.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
       AgendaEvent.belongsTo(models.Client, { foreignKey: "client_id", as: "client" });
       AgendaEvent.belongsTo(models.Project, { foreignKey: "project_id", as: "project" });
       AgendaEvent.belongsTo(models.User, { foreignKey: "created_by_user_id", as: "createdBy" });
@@ -13,6 +14,7 @@ module.exports = (sequelize) => {
   AgendaEvent.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: false },
       title: { type: DataTypes.STRING(300), allowNull: false },
       description: { type: DataTypes.TEXT, allowNull: true },
       starts_at: { type: DataTypes.DATE, allowNull: false },

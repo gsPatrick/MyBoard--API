@@ -8,6 +8,7 @@ Sistema de gerenciamento de projetos para desenvolvedores.
 |-----------|-----------|
 | [ONBOARDING.md](./ONBOARDING.md) | Deploy no servidor, migrar DB |
 | [ENV_REFERENCE.md](./ENV_REFERENCE.md) | Variáveis de ambiente |
+| [features/Auth.md](./features/Auth.md) | **SaaS, cadastro, login, JWT, roles** |
 | [features/Clients.md](./features/Clients.md) | Clientes, tags, visibilidade |
 | [features/Projects.md](./features/Projects.md) | Projetos como arquivos |
 | [features/ProjectDetails.md](./features/ProjectDetails.md) | Detalhes flexíveis |
@@ -49,8 +50,13 @@ MediaFile → Client | Project | User | ...
 
 `/api/v1/...` — Health: `GET /health`, `GET /api/v1/ping`
 
+## SaaS & Auth
+
+Todas as rotas de dados exigem `Authorization: Bearer <token>`.  
+Cadastro, login e reset de senha: ver [features/Auth.md](./features/Auth.md).
+
 ## Tempo real
 
 Socket.io em `/socket.io` — evento `notification` por usuário (`user:{userId}`).
 
-Header temporário (até auth): `X-User-Id: <uuid>`
+Header temporário (até auth no frontend): `X-User-Id: <uuid>` — **deprecated**, use JWT.

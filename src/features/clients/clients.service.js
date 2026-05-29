@@ -4,9 +4,14 @@ const AppError = require("../../utils/app-error");
 const { CLIENT_STATUSES, IMPORTANCE_LEVELS, NOTIFICATION_EVENTS } = require("../../config/constants");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
+const {
+  applyTenantFilter,
+  resolveTenantIdForWrite,
+  assertResourceTenant,
+} = require("../../utils/request-context");
 
-function buildWhere(filters = {}) {
-  const where = {};
+function buildWhere(filters = {}, ctx) {
+  const where = applyTenantFilter({}, ctx);
 
   if (filters.status && CLIENT_STATUSES.includes(filters.status)) {
     where.status = filters.status;
@@ -41,13 +46,13 @@ const clientIncludes = [
   { model: MediaFile, as: "avatar", required: false },
 ];
 
-async function listClients(query = {}) {
+async function listClients(query = {}, ctx) {
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
   const offset = (page - 1) * limit;
 
   const { rows, count } = await Client.findAndCountAll({
-    where: buildWhere(query),
+    where: buildWhere(query, ctx),
     include: clientIncludes,
     order: [
       ["importance_level", "DESC"],
@@ -63,7 +68,7 @@ async function listClients(query = {}) {
   };
 }
 
-async function getClientById(id) {
+async function getClientById(id, ctx) {
   const client = await Client.findByPk(id, {
     include: [
       ...clientIncludes,
@@ -75,14 +80,10 @@ async function getClientById(id) {
     ],
   });
 
-  if (!client) {
-    throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
-  }
-
-  return client;
+  return assertResourceTenant(client, ctx, "CLIENT_NOT_FOUND");
 }
 
-async function createClient(payload, notifyUserId = null) {
+async function createClient(payload, ctx) {
   if (!payload.name?.trim()) {
     throw new AppError("Nome do cliente é obrigatório", 400, "VALIDATION_ERROR");
   }
@@ -91,7 +92,10 @@ async function createClient(payload, notifyUserId = null) {
     throw new AppError("importance_level inválido", 400, "VALIDATION_ERROR");
   }
 
+  const tenantId = resolveTenantIdForWrite(ctx, payload.tenant_id);
+
   const client = await Client.create({
+    tenant_id: tenantId,
     name: payload.name.trim(),
     email: payload.email?.trim() || null,
     company: payload.company?.trim() || null,
@@ -105,12 +109,13 @@ async function createClient(payload, notifyUserId = null) {
   });
 
   if (payload.tag_ids) {
-    await tagsService.syncClientTags(client.id, payload.tag_ids);
+    await tagsService.syncClientTags(client.id, payload.tag_ids, ctx);
   }
 
-  if (notifyUserId) {
+  if (ctx.userId) {
     await notificationsService.createAndEmit({
-      userId: notifyUserId,
+      userId: ctx.userId,
+      tenantId,
       eventType: NOTIFICATION_EVENTS.CLIENT_CREATED,
       title: "Novo cliente",
       message: `Cliente "${client.name}" cadastrado`,
@@ -119,14 +124,12 @@ async function createClient(payload, notifyUserId = null) {
     });
   }
 
-  return getClientById(client.id);
+  return getClientById(client.id, ctx);
 }
 
-async function updateClient(id, payload) {
+async function updateClient(id, payload, ctx) {
   const client = await Client.findByPk(id);
-  if (!client) {
-    throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
-  }
+  assertResourceTenant(client, ctx, "CLIENT_NOT_FOUND");
 
   const fields = [
     "name", "email", "company", "phone", "document", "status", "notes",
@@ -151,19 +154,17 @@ async function updateClient(id, payload) {
   await client.update(updates);
 
   if (payload.tag_ids !== undefined) {
-    await tagsService.syncClientTags(client.id, payload.tag_ids);
+    await tagsService.syncClientTags(client.id, payload.tag_ids, ctx);
   }
 
-  return getClientById(client.id);
+  return getClientById(client.id, ctx);
 }
 
-async function deleteClient(id) {
+async function deleteClient(id, ctx) {
   const client = await Client.findByPk(id);
-  if (!client) {
-    throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
-  }
+  assertResourceTenant(client, ctx, "CLIENT_NOT_FOUND");
 
-  const projectCount = await Project.count({ where: { client_id: id } });
+  const projectCount = await Project.count({ where: { client_id: id, tenant_id: client.tenant_id } });
   if (projectCount > 0) {
     throw new AppError(
       "Cliente possui projetos vinculados. Remova ou transfira os projetos antes.",

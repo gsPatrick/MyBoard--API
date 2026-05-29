@@ -4,8 +4,14 @@ const AppError = require("../../utils/app-error");
 const { slugify } = require("../../utils/crypto");
 const notificationsService = require("../notifications/notifications.service");
 const { NOTIFICATION_EVENTS } = require("../../config/constants");
+const {
+  applyTenantFilter,
+  resolveTenantIdForWrite,
+  assertResourceTenant,
+} = require("../../utils/request-context");
 
-function applyVisibility(where, query = {}) {
+function applyVisibility(where, query = {}, ctx) {
+  applyTenantFilter(where, ctx);
   if (query.include_hidden !== "true") {
     where.is_hidden = false;
   }
@@ -48,8 +54,8 @@ async function isDescendant(folderId, potentialParentId) {
   return false;
 }
 
-async function listFolders(query = {}) {
-  const where = applyVisibility({}, query);
+async function listFolders(query = {}, ctx) {
+  const where = applyVisibility({}, query, ctx);
 
   if (query.client_id) where.client_id = query.client_id;
   if (query.parent_id === "null" || query.parent_id === null) {
@@ -67,14 +73,12 @@ async function listFolders(query = {}) {
   });
 }
 
-async function getFolderContents(folderId, query = {}) {
+async function getFolderContents(folderId, query = {}, ctx) {
   const folder = await WorkspaceFolder.findByPk(folderId);
-  if (!folder) {
-    throw new AppError("Pasta não encontrada", 404, "FOLDER_NOT_FOUND");
-  }
+  assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
 
-  const folderWhere = applyVisibility({ parent_id: folderId }, query);
-  const projectWhere = applyVisibility({ folder_id: folderId }, query);
+  const folderWhere = applyVisibility({ parent_id: folderId }, query, ctx);
+  const projectWhere = applyVisibility({ folder_id: folderId }, query, ctx);
 
   const [subfolders, projects] = await Promise.all([
     WorkspaceFolder.findAll({
@@ -104,13 +108,14 @@ async function getFolderContents(folderId, query = {}) {
   };
 }
 
-async function getWorkspaceTree(query = {}) {
+async function getWorkspaceTree(query = {}, ctx) {
   const rootWhere = applyVisibility(
     {
       parent_id: null,
       ...(query.client_id ? { client_id: query.client_id } : {}),
     },
-    query
+    query,
+    ctx
   );
 
   const roots = await WorkspaceFolder.findAll({
@@ -122,7 +127,7 @@ async function getWorkspaceTree(query = {}) {
   });
 
   async function buildNode(folder) {
-    const contents = await getFolderContents(folder.id, query);
+    const contents = await getFolderContents(folder.id, query, ctx);
     const childFolders = await Promise.all(
       contents.children.folders.map(async (child) => {
         const childModel = await WorkspaceFolder.findByPk(child.id);
@@ -145,7 +150,8 @@ async function getWorkspaceTree(query = {}) {
       folder_id: null,
       ...(query.client_id ? { client_id: query.client_id } : {}),
     },
-    query
+    query,
+    ctx
   );
 
   const rootProjects = await Project.findAll({
@@ -159,16 +165,16 @@ async function getWorkspaceTree(query = {}) {
   };
 }
 
-async function createFolder(payload, notifyUserId = null) {
+async function createFolder(payload, ctx) {
   if (!payload.name?.trim()) {
     throw new AppError("Nome da pasta é obrigatório", 400, "VALIDATION_ERROR");
   }
 
+  const tenantId = resolveTenantIdForWrite(ctx, payload.tenant_id);
+
   if (payload.parent_id) {
     const parent = await WorkspaceFolder.findByPk(payload.parent_id);
-    if (!parent) {
-      throw new AppError("Pasta pai não encontrada", 404, "FOLDER_NOT_FOUND");
-    }
+    assertResourceTenant(parent, ctx, "FOLDER_NOT_FOUND");
     if (payload.client_id && parent.client_id && parent.client_id !== payload.client_id) {
       throw new AppError("client_id incompatível com a pasta pai", 400, "VALIDATION_ERROR");
     }
@@ -176,9 +182,7 @@ async function createFolder(payload, notifyUserId = null) {
 
   if (payload.client_id) {
     const client = await Client.findByPk(payload.client_id);
-    if (!client) {
-      throw new AppError("Cliente não encontrado", 404, "CLIENT_NOT_FOUND");
-    }
+    assertResourceTenant(client, ctx, "CLIENT_NOT_FOUND");
   }
 
   const baseSlug = slugify(payload.slug || payload.name);
@@ -189,6 +193,7 @@ async function createFolder(payload, notifyUserId = null) {
   });
 
   const folder = await WorkspaceFolder.create({
+    tenant_id: tenantId,
     parent_id: payload.parent_id || null,
     client_id: payload.client_id || null,
     name: payload.name.trim(),
@@ -201,9 +206,10 @@ async function createFolder(payload, notifyUserId = null) {
     is_active: payload.is_active ?? true,
   });
 
-  if (notifyUserId) {
+  if (ctx.userId) {
     await notificationsService.createAndEmit({
-      userId: notifyUserId,
+      userId: ctx.userId,
+      tenantId,
       eventType: NOTIFICATION_EVENTS.FOLDER_CREATED,
       title: "Nova pasta criada",
       message: `Pasta "${folder.name}" foi criada`,
@@ -216,11 +222,9 @@ async function createFolder(payload, notifyUserId = null) {
   return folder;
 }
 
-async function updateFolder(id, payload) {
+async function updateFolder(id, payload, ctx) {
   const folder = await WorkspaceFolder.findByPk(id);
-  if (!folder) {
-    throw new AppError("Pasta não encontrada", 404, "FOLDER_NOT_FOUND");
-  }
+  assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
 
   const updates = {};
   const fields = ["name", "description", "color", "icon", "sort_order", "is_hidden", "is_active", "client_id"];
@@ -255,24 +259,21 @@ async function updateFolder(id, payload) {
   return folder;
 }
 
-async function moveProjectToFolder(projectId, folderId, notifyUserId = null) {
+async function moveProjectToFolder(projectId, folderId, ctx) {
   const project = await Project.findByPk(projectId);
-  if (!project) {
-    throw new AppError("Projeto não encontrado", 404, "PROJECT_NOT_FOUND");
-  }
+  assertResourceTenant(project, ctx, "PROJECT_NOT_FOUND");
 
   if (folderId) {
     const folder = await WorkspaceFolder.findByPk(folderId);
-    if (!folder) {
-      throw new AppError("Pasta não encontrada", 404, "FOLDER_NOT_FOUND");
-    }
+    assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
   }
 
   await project.update({ folder_id: folderId || null });
 
-  if (notifyUserId) {
+  if (ctx.userId) {
     await notificationsService.createAndEmit({
-      userId: notifyUserId,
+      userId: ctx.userId,
+      tenantId: project.tenant_id,
       eventType: NOTIFICATION_EVENTS.PROJECT_MOVED,
       title: "Projeto movido",
       message: `"${project.name}" foi movido para ${folderId ? "uma pasta" : "a raiz"}`,
@@ -285,11 +286,9 @@ async function moveProjectToFolder(projectId, folderId, notifyUserId = null) {
   return project;
 }
 
-async function deleteFolder(id) {
+async function deleteFolder(id, ctx) {
   const folder = await WorkspaceFolder.findByPk(id);
-  if (!folder) {
-    throw new AppError("Pasta não encontrada", 404, "FOLDER_NOT_FOUND");
-  }
+  assertResourceTenant(folder, ctx, "FOLDER_NOT_FOUND");
 
   const childCount = await WorkspaceFolder.count({ where: { parent_id: id } });
   const projectCount = await Project.count({ where: { folder_id: id } });

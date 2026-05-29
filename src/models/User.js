@@ -4,6 +4,8 @@ const { USER_ROLES } = require("../config/constants");
 module.exports = (sequelize) => {
   class User extends Model {
     static associate(models) {
+      User.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       User.belongsTo(models.MediaFile, {
         foreignKey: "avatar_media_id",
         as: "avatar",
@@ -18,14 +20,26 @@ module.exports = (sequelize) => {
         foreignKey: "uploaded_by_user_id",
         as: "uploads",
       });
+
+      User.hasMany(models.PasswordResetToken, {
+        foreignKey: "user_id",
+        as: "passwordResetTokens",
+      });
+    }
+
+    toSafeJSON() {
+      const json = this.toJSON();
+      delete json.password_hash;
+      return json;
     }
   }
 
   User.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: true },
       name: { type: DataTypes.STRING(200), allowNull: false },
-      email: { type: DataTypes.STRING(255), allowNull: false, unique: true },
+      email: { type: DataTypes.STRING(255), allowNull: false },
       password_hash: { type: DataTypes.STRING(255), allowNull: true },
       role: { type: DataTypes.ENUM(...USER_ROLES), allowNull: false, defaultValue: "developer" },
       is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },

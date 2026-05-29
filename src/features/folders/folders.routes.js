@@ -1,15 +1,19 @@
 const { Router } = require("express");
+const { requireAuth } = require("../../middlewares/require-auth");
+const authorize = require("../../middlewares/authorize");
 const foldersController = require("./folders.controller");
 
 const router = Router();
 
+router.use(...requireAuth);
+
 router.get("/tree", foldersController.tree);
 router.get("/", foldersController.list);
-router.post("/", foldersController.create);
+router.post("/", authorize("admin", "developer"), foldersController.create);
 router.get("/:id/contents", foldersController.contents);
-router.patch("/:id", foldersController.update);
-router.put("/:id", foldersController.update);
-router.delete("/:id", foldersController.remove);
-router.post("/move-project/:projectId", foldersController.moveProject);
+router.patch("/:id", authorize("admin", "developer"), foldersController.update);
+router.put("/:id", authorize("admin", "developer"), foldersController.update);
+router.delete("/:id", authorize("admin"), foldersController.remove);
+router.post("/move-project/:projectId", authorize("admin", "developer"), foldersController.moveProject);
 
 module.exports = router;

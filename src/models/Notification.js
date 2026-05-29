@@ -3,6 +3,8 @@ const { Model, DataTypes } = require("sequelize");
 module.exports = (sequelize) => {
   class Notification extends Model {
     static associate(models) {
+      Notification.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       Notification.belongsTo(models.User, {
         foreignKey: "user_id",
         as: "user",
@@ -13,6 +15,7 @@ module.exports = (sequelize) => {
   Notification.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: true },
       user_id: { type: DataTypes.UUID, allowNull: false },
       event_type: { type: DataTypes.STRING(80), allowNull: false },
       title: { type: DataTypes.STRING(300), allowNull: false },

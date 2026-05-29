@@ -32,7 +32,7 @@ module.exports = {
   MEDIA_KINDS: ["avatar", "cover", "attachment", "thumbnail"],
   STORAGE_DISKS: ["local", "s3"],
 
-  USER_ROLES: ["admin", "developer", "viewer"],
+  USER_ROLES: ["super_admin", "admin", "developer", "viewer"],
 
   AGENDA_STATUSES: ["scheduled", "completed", "cancelled"],
 

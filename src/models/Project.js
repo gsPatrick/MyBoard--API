@@ -4,6 +4,8 @@ const { PROJECT_STATUSES, PROJECT_PRIORITIES, IMPORTANCE_LEVELS } = require("../
 module.exports = (sequelize) => {
   class Project extends Model {
     static associate(models) {
+      Project.belongsTo(models.Tenant, { foreignKey: "tenant_id", as: "tenant" });
+
       Project.belongsTo(models.Client, {
         foreignKey: "client_id",
         as: "client",
@@ -41,6 +43,7 @@ module.exports = (sequelize) => {
   Project.init(
     {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+      tenant_id: { type: DataTypes.UUID, allowNull: false },
       client_id: { type: DataTypes.UUID, allowNull: false },
       folder_id: { type: DataTypes.UUID, allowNull: true },
       name: {
