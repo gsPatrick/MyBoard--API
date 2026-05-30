@@ -9,6 +9,12 @@ const list = catchAsync(async (req, res) => {
   return sendSuccess(res, demands);
 });
 
+const listForTenant = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const demands = await projectDemandsService.listDemandsForTenant(req.query, ctx);
+  return sendSuccess(res, demands);
+});
+
 const getById = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
   const demand = await projectDemandsService.getDemandById(
@@ -44,6 +50,7 @@ const remove = catchAsync(async (req, res) => {
 
 module.exports = {
   list,
+  listForTenant,
   getById,
   create,
   update,

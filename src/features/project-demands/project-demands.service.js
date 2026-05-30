@@ -1,7 +1,7 @@
-const { Project, ProjectDemand } = require("../../models");
+const { Project, ProjectDemand, Client } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { DEMAND_STATUSES } = require("../../config/constants");
-const { assertResourceTenant } = require("../../utils/request-context");
+const { applyTenantFilter, assertResourceTenant } = require("../../utils/request-context");
 
 async function ensureProjectExists(projectId, ctx) {
   const project = await Project.findByPk(projectId);
@@ -19,6 +19,41 @@ async function listDemands(projectId, query = {}, ctx) {
 
   return ProjectDemand.findAll({
     where,
+    order: [
+      ["sort_order", "ASC"],
+      ["created_at", "ASC"],
+    ],
+  });
+}
+
+async function listDemandsForTenant(query = {}, ctx) {
+  const demandWhere = {};
+  const projectWhere = applyTenantFilter({}, ctx);
+
+  if (query.project_id) demandWhere.project_id = query.project_id;
+  if (query.client_id) projectWhere.client_id = query.client_id;
+  if (query.status && DEMAND_STATUSES.includes(query.status)) {
+    demandWhere.status = query.status;
+  }
+
+  return ProjectDemand.findAll({
+    where: demandWhere,
+    include: [
+      {
+        model: Project,
+        as: "project",
+        where: projectWhere,
+        required: true,
+        attributes: ["id", "name", "slug", "status", "client_id", "color"],
+        include: [
+          {
+            model: Client,
+            as: "client",
+            attributes: ["id", "name", "company"],
+          },
+        ],
+      },
+    ],
     order: [
       ["sort_order", "ASC"],
       ["created_at", "ASC"],
@@ -98,6 +133,7 @@ async function deleteDemand(projectId, demandId, ctx) {
 
 module.exports = {
   listDemands,
+  listDemandsForTenant,
   getDemandById,
   createDemand,
   updateDemand,
