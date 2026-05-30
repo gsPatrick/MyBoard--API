@@ -227,6 +227,7 @@ async function createProject(payload, ctx) {
     start_date: payload.start_date || null,
     ...deadline,
     budget: payload.budget ?? null,
+    origin,
   });
 
   if (Array.isArray(payload.details) && payload.details.length > 0) {
@@ -278,7 +279,7 @@ async function updateProject(id, payload, ctx) {
   const fields = [
     "name", "client_id", "folder_id", "description", "priority",
     "importance_level", "is_hidden", "is_active", "icon", "color", "cover_media_id",
-    "start_date", "budget",
+    "start_date", "budget", "origin",
   ];
 
   fields.forEach((field) => {
