@@ -17,7 +17,12 @@ async function ensureEntityExists(entityType, entityId, ctx) {
     throw new AppError("entity_type inválido", 400, "VALIDATION_ERROR");
   }
 
-  if (entityType === "project_detail" || entityType === "agenda_event" || entityType === "folder") {
+  if (
+    entityType === "project_detail" ||
+    entityType === "project_demand" ||
+    entityType === "agenda_event" ||
+    entityType === "folder"
+  ) {
     return true;
   }
 

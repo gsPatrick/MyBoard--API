@@ -88,6 +88,7 @@ async function createDemand(projectId, payload, ctx) {
     project_id: projectId,
     title: payload.title.trim(),
     description: payload.description?.trim() || null,
+    notes: payload.notes?.trim() || null,
     status,
     sort_order: payload.sort_order ?? 0,
     completed_at: status === "done" ? new Date() : null,
@@ -108,6 +109,10 @@ async function updateDemand(projectId, demandId, payload, ctx) {
 
   if (payload.description !== undefined) {
     updates.description = payload.description?.trim() || null;
+  }
+
+  if (payload.notes !== undefined) {
+    updates.notes = payload.notes?.trim() || null;
   }
 
   if (payload.sort_order !== undefined) {

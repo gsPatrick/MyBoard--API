@@ -20,6 +20,7 @@ module.exports = (sequelize) => {
         validate: { notEmpty: true },
       },
       description: { type: DataTypes.TEXT, allowNull: true },
+      notes: { type: DataTypes.TEXT, allowNull: true },
       status: {
         type: DataTypes.ENUM("pending", "in_progress", "done", "cancelled"),
         allowNull: false,

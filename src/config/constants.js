@@ -34,7 +34,15 @@ module.exports = {
   ],
   DETAIL_VALUE_TYPES: ["text", "json", "url", "markdown", "secret"],
 
-  MEDIA_ENTITY_TYPES: ["client", "project", "user", "project_detail", "agenda_event", "folder"],
+  MEDIA_ENTITY_TYPES: [
+    "client",
+    "project",
+    "user",
+    "project_detail",
+    "project_demand",
+    "agenda_event",
+    "folder",
+  ],
   MEDIA_KINDS: ["avatar", "cover", "attachment", "thumbnail"],
   STORAGE_DISKS: ["local", "s3"],
 
