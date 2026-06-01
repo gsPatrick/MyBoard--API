@@ -3,6 +3,12 @@ const AppError = require("../../utils/app-error");
 const { resolveTenantIdForWrite } = require("../../utils/request-context");
 const openRouterClient = require("../../providers/openrouter/openrouter.client");
 const policyEngine = require("../bordie/policy-engine.service");
+const {
+  AI_PROVIDER_IDS,
+  AI_PROVIDER_PRESETS,
+  normalizeProviderId,
+  migrateLegacyAiSettings,
+} = require("./ai-providers.config");
 
 const DEFAULT_PRIVACY = {
   retain_whatsapp_raw_days: 30,
@@ -16,17 +22,50 @@ function maskSecret(value) {
   return `${value.slice(0, 4)}••••${value.slice(-4)}`;
 }
 
-function sanitizeAiSettings(ai = {}) {
-  const hasKey = Boolean(ai.openrouter_api_key);
+function sanitizeProviderConfig(providerId, config = {}) {
+  const preset = AI_PROVIDER_PRESETS[providerId];
+  const hasKey = Boolean(config.api_key);
   return {
-    provider: ai.provider || "openrouter",
-    base_url: ai.base_url || process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
-    chat_model: ai.chat_model || process.env.OPENROUTER_CHAT_MODEL || "openai/gpt-4o-mini",
-    embedding_model:
-      ai.embedding_model || process.env.OPENROUTER_EMBEDDING_MODEL || "openai/text-embedding-3-small",
+    id: providerId,
+    label: preset.label,
+    enabled: Boolean(config.enabled),
+    api_format: preset.api_format,
+    base_url: config.base_url || preset.base_url,
+    chat_model: config.chat_model || preset.chat_model,
+    embedding_model: config.embedding_model ?? preset.embedding_model,
     has_api_key: hasKey,
-    api_key_masked: hasKey ? maskSecret(ai.openrouter_api_key) : null,
-    configured: hasKey || openRouterClient.isConfigured(),
+    api_key_masked: hasKey ? maskSecret(config.api_key) : null,
+    configured: hasKey,
+    description: preset.description,
+    key_hint: preset.key_hint,
+    docs_url: preset.docs_url,
+  };
+}
+
+function sanitizeAiSettings(ai = {}) {
+  const migrated = migrateLegacyAiSettings(ai);
+  const activeProvider = normalizeProviderId(migrated.active_provider);
+  const activeConfig = migrated.providers[activeProvider] || {};
+
+  const providers = AI_PROVIDER_IDS.reduce((acc, id) => {
+    acc[id] = sanitizeProviderConfig(id, migrated.providers[id]);
+    return acc;
+  }, {});
+
+  const hasActiveKey = Boolean(activeConfig.api_key);
+  const envFallback = openRouterClient.isConfigured();
+
+  return {
+    active_provider: activeProvider,
+    providers,
+    provider: activeProvider,
+    base_url: activeConfig.base_url || AI_PROVIDER_PRESETS[activeProvider].base_url,
+    chat_model: activeConfig.chat_model || AI_PROVIDER_PRESETS[activeProvider].chat_model,
+    embedding_model:
+      activeConfig.embedding_model ?? AI_PROVIDER_PRESETS[activeProvider].embedding_model,
+    has_api_key: hasActiveKey,
+    api_key_masked: hasActiveKey ? maskSecret(activeConfig.api_key) : null,
+    configured: hasActiveKey || envFallback,
   };
 }
 
@@ -86,26 +125,58 @@ async function getWorkspaceSettings(ctx) {
 
 async function updateAiSettings(payload, ctx) {
   const tenant = await getTenantForContext(ctx);
-  const current = tenant.settings?.ai || {};
-  const next = { ...current };
+  const migrated = migrateLegacyAiSettings(tenant.settings?.ai || {});
+  const next = { ...migrated };
 
-  if (payload.provider !== undefined) next.provider = payload.provider || "openrouter";
-  if (payload.base_url !== undefined) next.base_url = String(payload.base_url || "").trim() || null;
-  if (payload.chat_model !== undefined) next.chat_model = String(payload.chat_model || "").trim() || null;
+  if (payload.active_provider !== undefined) {
+    next.active_provider = normalizeProviderId(payload.active_provider);
+  }
+
+  const providerId = normalizeProviderId(payload.provider || payload.active_provider || next.active_provider);
+  const providerConfig = { ...(next.providers[providerId] || {}) };
+
+  if (payload.enabled !== undefined) providerConfig.enabled = Boolean(payload.enabled);
+  if (payload.base_url !== undefined) {
+    providerConfig.base_url = String(payload.base_url || "").trim() || AI_PROVIDER_PRESETS[providerId].base_url;
+  }
+  if (payload.chat_model !== undefined) {
+    providerConfig.chat_model = String(payload.chat_model || "").trim() || AI_PROVIDER_PRESETS[providerId].chat_model;
+  }
   if (payload.embedding_model !== undefined) {
-    next.embedding_model = String(payload.embedding_model || "").trim() || null;
+    providerConfig.embedding_model = String(payload.embedding_model || "").trim() || null;
+  }
+
+  if (payload.api_key !== undefined) {
+    const key = String(payload.api_key || "").trim();
+    if (key && !key.includes("••••")) providerConfig.api_key = key;
   }
 
   if (payload.openrouter_api_key !== undefined) {
     const key = String(payload.openrouter_api_key || "").trim();
     if (key && !key.includes("••••")) {
-      next.openrouter_api_key = key;
+      providerConfig.api_key = key;
+      next.active_provider = providerId;
     }
   }
 
   if (payload.clear_api_key === true) {
-    delete next.openrouter_api_key;
+    delete providerConfig.api_key;
   }
+
+  if (providerConfig.api_key) {
+    providerConfig.enabled = true;
+    next.active_provider = providerId;
+  }
+
+  next.providers = {
+    ...next.providers,
+    [providerId]: providerConfig,
+  };
+
+  delete next.openrouter_api_key;
+  delete next.base_url;
+  delete next.chat_model;
+  delete next.embedding_model;
 
   const settings = {
     ...(tenant.settings || {}),
@@ -157,18 +228,18 @@ async function updatePrivacySettings(payload, ctx) {
 
 async function testAiConnection(ctx) {
   const tenant = await getTenantForContext(ctx);
-  const ai = tenant.settings?.ai || {};
-  const apiKey = ai.openrouter_api_key || process.env.OPENROUTER_API_KEY;
+  const credentials = await resolveAiCredentials(tenant.id);
 
-  if (!apiKey) {
-    return { ok: false, message: "Nenhuma chave de API configurada." };
+  if (!credentials.apiKey) {
+    return { ok: false, message: "Nenhuma chave de API configurada para o provedor ativo." };
   }
 
   try {
     const response = await openRouterClient.createChatCompletion({
-      apiKey,
-      baseUrl: ai.base_url,
-      model: ai.chat_model,
+      apiKey: credentials.apiKey,
+      baseUrl: credentials.baseUrl,
+      model: credentials.chatModel,
+      apiFormat: credentials.apiFormat,
       messages: [{ role: "user", content: "Responda apenas: ok" }],
       max_tokens: 8,
       temperature: 0,
@@ -176,13 +247,15 @@ async function testAiConnection(ctx) {
 
     return {
       ok: true,
-      message: "Conexão com a IA estabelecida com sucesso.",
+      message: `Conexão com ${AI_PROVIDER_PRESETS[credentials.provider]?.label || credentials.provider} OK.`,
       sample: String(response.content || "").slice(0, 80),
+      provider: credentials.provider,
     };
   } catch (error) {
     return {
       ok: false,
       message: error.message || "Falha ao conectar com a IA.",
+      provider: credentials.provider,
     };
   }
 }
@@ -195,11 +268,24 @@ async function resolveTenantAiConfig(tenantId) {
 
 async function resolveAiCredentials(tenantId) {
   const ai = await resolveTenantAiConfig(tenantId);
+  const migrated = migrateLegacyAiSettings(ai);
+  const provider = normalizeProviderId(migrated.active_provider);
+  const config = migrated.providers[provider] || {};
+  const preset = AI_PROVIDER_PRESETS[provider];
+
+  const envKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || null;
+
   return {
-    apiKey: ai.openrouter_api_key || process.env.OPENROUTER_API_KEY || null,
-    baseUrl: ai.base_url || process.env.OPENROUTER_BASE_URL || null,
-    chatModel: ai.chat_model || process.env.OPENROUTER_CHAT_MODEL || null,
-    embeddingModel: ai.embedding_model || process.env.OPENROUTER_EMBEDDING_MODEL || null,
+    provider,
+    apiFormat: preset.api_format,
+    apiKey: config.api_key || envKey,
+    baseUrl: config.base_url || preset.base_url || process.env.OPENROUTER_BASE_URL || null,
+    chatModel: config.chat_model || preset.chat_model || process.env.OPENROUTER_CHAT_MODEL || null,
+    embeddingModel:
+      config.embedding_model ??
+      preset.embedding_model ??
+      process.env.OPENROUTER_EMBEDDING_MODEL ??
+      null,
   };
 }
 

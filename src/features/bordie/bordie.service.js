@@ -177,6 +177,7 @@ async function runChat({
       apiKey: ai.apiKey,
       baseUrl: ai.baseUrl,
       model: ai.chatModel,
+      apiFormat: ai.apiFormat,
     });
     reply = completion.content;
   }

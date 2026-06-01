@@ -13,6 +13,7 @@ async function createChatCompletion({
   tools = null,
   apiKey = null,
   baseUrl = null,
+  apiFormat = "openai",
 }) {
   const resolvedKey = apiKey || process.env.OPENROUTER_API_KEY;
   const resolvedBase = (baseUrl || OPENROUTER_BASE_URL).replace(/\/$/, "");
@@ -20,9 +21,20 @@ async function createChatCompletion({
   if (!resolvedKey) {
     const lastUser = [...messages].reverse().find((item) => item.role === "user");
     return {
-      content: `OpenRouter não configurado. Entrada recebida: ${lastUser?.content || "…"}`,
+      content: `IA não configurada. Entrada recebida: ${lastUser?.content || "…"}`,
       raw: null,
     };
+  }
+
+  if (apiFormat === "anthropic") {
+    return createAnthropicChatCompletion({
+      messages,
+      model,
+      temperature,
+      max_tokens,
+      apiKey: resolvedKey,
+      baseUrl: resolvedBase,
+    });
   }
 
   const body = {
@@ -37,20 +49,25 @@ async function createChatCompletion({
     body.tool_choice = "auto";
   }
 
+  const headers = {
+    Authorization: `Bearer ${resolvedKey}`,
+    "Content-Type": "application/json",
+  };
+
+  if (resolvedBase.includes("openrouter.ai")) {
+    headers["HTTP-Referer"] = process.env.APP_URL || "http://localhost:3000";
+    headers["X-Title"] = "MyBoard Bordie";
+  }
+
   const response = await fetch(`${resolvedBase}/chat/completions`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${resolvedKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
-      "X-Title": "MyBoard Bordie",
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenRouter chat falhou (${response.status}): ${errorText.slice(0, 240)}`);
+    throw new Error(`Chat IA falhou (${response.status}): ${errorText.slice(0, 240)}`);
   }
 
   const payload = await response.json();
@@ -58,6 +75,55 @@ async function createChatCompletion({
   return {
     content: message.content || "",
     tool_calls: message.tool_calls || [],
+    raw: payload,
+  };
+}
+
+async function createAnthropicChatCompletion({
+  messages,
+  model,
+  temperature = 0.3,
+  max_tokens = 1200,
+  apiKey,
+  baseUrl,
+}) {
+  const systemParts = messages.filter((item) => item.role === "system").map((item) => item.content);
+  const conversation = messages
+    .filter((item) => item.role !== "system")
+    .map((item) => ({
+      role: item.role === "assistant" ? "assistant" : "user",
+      content: String(item.content || ""),
+    }));
+
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/messages`, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: model || "claude-sonnet-4-20250514",
+      max_tokens: max_tokens || 1200,
+      temperature,
+      system: systemParts.length ? systemParts.join("\n\n") : undefined,
+      messages: conversation,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Claude falhou (${response.status}): ${errorText.slice(0, 240)}`);
+  }
+
+  const payload = await response.json();
+  const textBlock = Array.isArray(payload.content)
+    ? payload.content.find((block) => block.type === "text")
+    : null;
+
+  return {
+    content: textBlock?.text || "",
+    tool_calls: [],
     raw: payload,
   };
 }
