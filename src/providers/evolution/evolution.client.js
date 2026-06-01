@@ -6,6 +6,19 @@ function getApiKey() {
   return process.env.EVOLUTION_API_KEY || "";
 }
 
+function formatEvolutionError(payload, status) {
+  const nested = payload?.response?.message;
+  if (Array.isArray(nested)) {
+    const flat = nested.flat().filter(Boolean);
+    if (flat.length) return flat.join("; ");
+  }
+  if (typeof payload?.message === "string") return payload.message;
+  if (typeof payload?.error === "string" && payload.error !== "Bad Request") {
+    return payload.error;
+  }
+  return `Evolution API error ${status}`;
+}
+
 function buildHeaders() {
   return {
     "Content-Type": "application/json",
@@ -30,12 +43,7 @@ async function request(path, options = {}) {
   }
 
   if (!response.ok) {
-    const message =
-      typeof payload === "object" && payload?.message
-        ? payload.message
-        : typeof payload === "string"
-          ? payload
-          : `Evolution API error ${response.status}`;
+    const message = formatEvolutionError(payload, response.status);
     const error = new Error(message);
     error.status = response.status;
     error.payload = payload;
@@ -53,6 +61,22 @@ async function fetchInstances(baseUrl) {
   return request("/instance/fetchInstances", { baseUrl });
 }
 
+function normalizeFetchedInstances(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.instances)) return payload.instances;
+  return [];
+}
+
+async function findInstanceByName(instanceName, baseUrl) {
+  const payload = await fetchInstances(baseUrl);
+  const instances = normalizeFetchedInstances(payload);
+  const target = String(instanceName || "").trim().toLowerCase();
+  return (
+    instances.find((item) => String(item?.name || item?.instanceName || "").toLowerCase() === target) ||
+    null
+  );
+}
+
 async function connectInstance(instanceName, baseUrl) {
   return request(`/instance/connect/${encodeURIComponent(instanceName)}`, { baseUrl });
 }
@@ -62,9 +86,26 @@ async function connectionState(instanceName, baseUrl) {
 }
 
 async function setWebhook(instanceName, payload, baseUrl) {
+  const events = payload.events || [
+    "MESSAGES_UPSERT",
+    "MESSAGES_UPDATE",
+    "CONNECTION_UPDATE",
+    "SEND_MESSAGE",
+  ];
+
+  const body = {
+    webhook: {
+      enabled: payload.enabled !== false,
+      url: payload.url,
+      webhookByEvents: payload.webhookByEvents ?? payload.webhook_by_events ?? false,
+      webhookBase64: payload.webhookBase64 ?? payload.webhook_base64 ?? false,
+      events,
+    },
+  };
+
   return request(`/webhook/set/${encodeURIComponent(instanceName)}`, {
     method: "POST",
-    body: payload,
+    body,
     baseUrl,
   });
 }
@@ -134,6 +175,8 @@ module.exports = {
   DEFAULT_BASE_URL,
   createInstance,
   fetchInstances,
+  findInstanceByName,
+  normalizeFetchedInstances,
   connectInstance,
   connectionState,
   setWebhook,

@@ -95,7 +95,9 @@ const backfillHistory = catchAsync(async (req, res) => {
 function verifyWebhookSecret(req) {
   const secret = process.env.WHATSAPP_WEBHOOK_SECRET;
   if (!secret) return true;
-  return req.get("x-myboard-webhook-secret") === secret;
+  const headerSecret = req.get("x-myboard-webhook-secret");
+  const querySecret = req.query?.secret;
+  return headerSecret === secret || querySecret === secret;
 }
 
 const evolutionWebhook = catchAsync(async (req, res) => {

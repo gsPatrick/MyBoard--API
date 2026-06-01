@@ -30,7 +30,93 @@ function formatPhoneDisplay(digits) {
 function buildWebhookUrl() {
   const appUrl = (process.env.APP_URL || "http://localhost:4000").replace(/\/$/, "");
   const prefix = process.env.APP_API_PREFIX || "/api";
-  return `${appUrl}${prefix}/v1/whatsapp/webhooks/evolution`;
+  const base = `${appUrl}${prefix}/v1/whatsapp/webhooks/evolution`;
+  const secret = process.env.WHATSAPP_WEBHOOK_SECRET;
+  if (!secret) return base;
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}secret=${encodeURIComponent(secret)}`;
+}
+
+function mapEvolutionConnectionState(remoteInstance) {
+  return (
+    remoteInstance?.connectionStatus ||
+    remoteInstance?.connection_state ||
+    remoteInstance?.state ||
+    "unknown"
+  );
+}
+
+function isEvolutionNameInUseError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  return error?.status === 403 && message.includes("already in use");
+}
+
+async function configureEvolutionWebhook(instanceName, baseUrl) {
+  const webhookUrl = buildWebhookUrl();
+  if (!webhookUrl.startsWith("http")) {
+    console.warn("[whatsapp] APP_URL inválida para webhook:", webhookUrl);
+    return null;
+  }
+
+  try {
+    return await evolutionClient.setWebhook(
+      instanceName,
+      {
+        url: webhookUrl,
+        webhook_by_events: false,
+        webhook_base64: false,
+        events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "SEND_MESSAGE"],
+      },
+      baseUrl
+    );
+  } catch (error) {
+    console.warn(`[whatsapp] Falha ao configurar webhook (${instanceName}):`, error.message);
+    return null;
+  }
+}
+
+async function provisionEvolutionInstance(instanceName, baseUrl, options = {}) {
+  if (!process.env.EVOLUTION_API_KEY) return null;
+
+  let remoteInstance = await evolutionClient.findInstanceByName(instanceName, baseUrl);
+
+  if (!remoteInstance) {
+    try {
+      await evolutionClient.createInstance(
+        {
+          instanceName,
+          qrcode: true,
+          integration: "WHATSAPP-BAILEYS",
+          ...(options.chatwoot_account_id
+            ? {
+                chatwootAccountId: String(options.chatwoot_account_id),
+                chatwootToken: options.chatwoot_token || process.env.CHATWOOT_API_TOKEN,
+                chatwootUrl: options.chatwoot_url || process.env.CHATWOOT_BASE_URL,
+                chatwootSignMsg: false,
+                chatwootReopenConversation: true,
+                chatwootConversationPending: false,
+                chatwootImportContacts: true,
+                chatwootNameInbox: options.chatwoot_name_inbox || instanceName,
+                chatwootMergeBrazilContacts: true,
+                chatwootImportMessages: true,
+                chatwootDaysLimitImportMessages: options.import_days || 3,
+              }
+            : {}),
+        },
+        baseUrl
+      );
+      remoteInstance = await evolutionClient.findInstanceByName(instanceName, baseUrl);
+    } catch (error) {
+      if (!isEvolutionNameInUseError(error)) throw error;
+      remoteInstance = await evolutionClient.findInstanceByName(instanceName, baseUrl);
+    }
+  }
+
+  if (options.configure_webhook !== false) {
+    await configureEvolutionWebhook(instanceName, baseUrl);
+  }
+
+  return remoteInstance;
 }
 
 async function listInstances(ctx) {
@@ -50,47 +136,10 @@ async function createInstance(payload, ctx) {
   if (existing) throw new AppError("Instância já existe", 409);
 
   const baseUrl = payload.evolution_base_url || evolutionClient.DEFAULT_BASE_URL;
+  let remoteInstance = null;
 
   if (payload.provision !== false && process.env.EVOLUTION_API_KEY) {
-    await evolutionClient.createInstance(
-      {
-        instanceName,
-        qrcode: true,
-        integration: "WHATSAPP-BAILEYS",
-        ...(payload.chatwoot_account_id
-          ? {
-              chatwootAccountId: String(payload.chatwoot_account_id),
-              chatwootToken: payload.chatwoot_token || process.env.CHATWOOT_API_TOKEN,
-              chatwootUrl: payload.chatwoot_url || process.env.CHATWOOT_BASE_URL,
-              chatwootSignMsg: false,
-              chatwootReopenConversation: true,
-              chatwootConversationPending: false,
-              chatwootImportContacts: true,
-              chatwootNameInbox: payload.chatwoot_name_inbox || instanceName,
-              chatwootMergeBrazilContacts: true,
-              chatwootImportMessages: true,
-              chatwootDaysLimitImportMessages: payload.import_days || 3,
-            }
-          : {}),
-      },
-      baseUrl
-    );
-
-    if (payload.configure_webhook !== false) {
-      await evolutionClient.setWebhook(
-        instanceName,
-        {
-          url: buildWebhookUrl(),
-          webhook_by_events: false,
-          webhook_base64: false,
-          events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "SEND_MESSAGE"],
-          headers: process.env.WHATSAPP_WEBHOOK_SECRET
-            ? { "x-myboard-webhook-secret": process.env.WHATSAPP_WEBHOOK_SECRET }
-            : undefined,
-        },
-        baseUrl
-      );
-    }
+    remoteInstance = await provisionEvolutionInstance(instanceName, baseUrl, payload);
   }
 
   return WhatsappInstance.create({
@@ -98,6 +147,7 @@ async function createInstance(payload, ctx) {
     instance_name: instanceName,
     provider: "evolution",
     evolution_base_url: baseUrl,
+    connection_state: mapEvolutionConnectionState(remoteInstance),
     chatwoot_account_id: payload.chatwoot_account_id
       ? String(payload.chatwoot_account_id)
       : process.env.CHATWOOT_ACCOUNT_ID || null,
@@ -133,6 +183,16 @@ async function ensureDefaultInstance(ctx) {
   let instance = await getActiveInstance(ctx);
   if (instance) return instance;
 
+  instance = await WhatsappInstance.findOne({
+    where: { tenant_id: ctx.tenantId, instance_name: DEFAULT_INSTANCE_NAME },
+  });
+  if (instance) {
+    if (!instance.is_active) {
+      await instance.update({ is_active: true });
+    }
+    return instance;
+  }
+
   const instanceName = DEFAULT_INSTANCE_NAME;
   return createInstance(
     {
@@ -144,8 +204,27 @@ async function ensureDefaultInstance(ctx) {
   );
 }
 
+async function refreshInstanceConnectionState(instance) {
+  if (!instance) return instance;
+
+  try {
+    const payload = await evolutionClient.connectionState(
+      instance.instance_name,
+      instance.evolution_base_url
+    );
+    const state = payload?.instance?.state || payload?.state || "unknown";
+    if (state !== instance.connection_state) {
+      await instance.update({ connection_state: state });
+    }
+  } catch (error) {
+    console.warn(`[whatsapp] Falha ao sincronizar estado (${instance.instance_name}):`, error.message);
+  }
+
+  return instance;
+}
+
 async function getWhatsappSetup(ctx) {
-  const instance = await ensureDefaultInstance(ctx);
+  const instance = await refreshInstanceConnectionState(await ensureDefaultInstance(ctx));
 
   let qr = null;
   if (instance.connection_state !== "open") {
