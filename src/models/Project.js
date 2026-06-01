@@ -52,6 +52,11 @@ module.exports = (sequelize) => {
         foreignKey: "project_id",
         as: "financialEntries",
       });
+
+      Project.hasMany(models.ProjectWhatsappLink, {
+        foreignKey: "project_id",
+        as: "whatsappLinks",
+      });
     }
   }
 

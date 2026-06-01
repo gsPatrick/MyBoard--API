@@ -32,6 +32,11 @@ module.exports = (sequelize) => {
         foreignKey: "client_id",
         as: "agendaEvents",
       });
+
+      Client.hasMany(models.ClientWhatsappLink, {
+        foreignKey: "client_id",
+        as: "whatsappLinks",
+      });
     }
   }
 

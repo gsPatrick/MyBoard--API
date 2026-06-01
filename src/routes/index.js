@@ -13,6 +13,10 @@ const usersRoutes = require("../features/users/users.routes");
 const financeRoutes = require("../features/finance/finance.routes");
 const demandsRoutes = require("../features/demands/demands.routes");
 const boardsRoutes = require("../features/boards/boards.routes");
+const whatsappRoutes = require("../features/whatsapp/whatsapp.routes");
+const ragRoutes = require("../features/rag/rag.routes");
+const bordieRoutes = require("../features/bordie/bordie.routes");
+const settingsRoutes = require("../features/settings/settings.routes");
 const { APP_TIMEZONE } = require("../config/constants");
 
 const router = Router();
@@ -44,5 +48,9 @@ router.use("/v1/users", usersRoutes);
 router.use("/v1/finance", financeRoutes);
 router.use("/v1/demands", demandsRoutes);
 router.use("/v1/boards", boardsRoutes);
+router.use("/v1/whatsapp", whatsappRoutes);
+router.use("/v1/rag", ragRoutes);
+router.use("/v1/bordie", bordieRoutes);
+router.use("/v1/settings", settingsRoutes);
 
 module.exports = router;
