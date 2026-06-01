@@ -1,4 +1,5 @@
 const { Op } = require("sequelize");
+const { DateTime } = require("luxon");
 const { AgendaEvent, Client, Project, User } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { AGENDA_STATUSES, NOTIFICATION_EVENTS, APP_TIMEZONE } = require("../../config/constants");
@@ -72,6 +73,17 @@ async function createEvent(payload, ctx) {
   const startsAt = parseLocalDateTime(payload.starts_at, timezone);
   if (!startsAt) {
     throw new AppError("starts_at inválido", 400, "VALIDATION_ERROR");
+  }
+
+  const now = new Date();
+  if (payload.all_day) {
+    const startDay = DateTime.fromJSDate(startsAt.toJSDate(), { zone: timezone }).startOf("day");
+    const today = DateTime.now().setZone(timezone).startOf("day");
+    if (startDay < today) {
+      throw new AppError("Não é possível agendar em data passada", 400, "VALIDATION_ERROR");
+    }
+  } else if (startsAt.toJSDate().getTime() < now.getTime()) {
+    throw new AppError("Não é possível agendar em horário passado", 400, "VALIDATION_ERROR");
   }
 
   let endsAt = null;
@@ -154,6 +166,20 @@ async function updateEvent(id, payload, ctx) {
   if (payload.starts_at !== undefined) {
     const startsAt = parseLocalDateTime(payload.starts_at, timezone);
     if (!startsAt) throw new AppError("starts_at inválido", 400, "VALIDATION_ERROR");
+
+    const allDay = payload.all_day ?? event.all_day;
+    const now = new Date();
+
+    if (allDay) {
+      const startDay = DateTime.fromJSDate(startsAt.toJSDate(), { zone: timezone }).startOf("day");
+      const today = DateTime.now().setZone(timezone).startOf("day");
+      if (startDay < today) {
+        throw new AppError("Não é possível agendar em data passada", 400, "VALIDATION_ERROR");
+      }
+    } else if (startsAt.toJSDate().getTime() < now.getTime()) {
+      throw new AppError("Não é possível agendar em horário passado", 400, "VALIDATION_ERROR");
+    }
+
     updates.starts_at = startsAt.toJSDate();
   }
 

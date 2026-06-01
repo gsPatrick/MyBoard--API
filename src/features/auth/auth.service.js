@@ -26,6 +26,14 @@ function normalizeOnboarding(value) {
     return defaultOnboarding();
   }
 
+  const storedVersion = Number(value.version) || 0;
+  if (
+    storedVersion < ONBOARDING_VERSION &&
+    (value.status === "pending" || value.status === "in_progress")
+  ) {
+    return defaultOnboarding();
+  }
+
   return {
     status: ONBOARDING_STATUSES.includes(value.status) ? value.status : "pending",
     step: Number.isFinite(Number(value.step)) ? Math.max(0, Number(value.step)) : 0,
