@@ -134,16 +134,25 @@ async function updateAiSettings(payload, ctx) {
 
   const providerId = normalizeProviderId(payload.provider || payload.active_provider || next.active_provider);
   const providerConfig = { ...(next.providers[providerId] || {}) };
+  const preset = AI_PROVIDER_PRESETS[providerId];
+  const isCustom = providerId === "custom";
 
   if (payload.enabled !== undefined) providerConfig.enabled = Boolean(payload.enabled);
-  if (payload.base_url !== undefined) {
-    providerConfig.base_url = String(payload.base_url || "").trim() || AI_PROVIDER_PRESETS[providerId].base_url;
-  }
-  if (payload.chat_model !== undefined) {
-    providerConfig.chat_model = String(payload.chat_model || "").trim() || AI_PROVIDER_PRESETS[providerId].chat_model;
-  }
-  if (payload.embedding_model !== undefined) {
-    providerConfig.embedding_model = String(payload.embedding_model || "").trim() || null;
+
+  if (isCustom) {
+    if (payload.base_url !== undefined) {
+      providerConfig.base_url = String(payload.base_url || "").trim() || preset.base_url;
+    }
+    if (payload.chat_model !== undefined) {
+      providerConfig.chat_model = String(payload.chat_model || "").trim() || preset.chat_model;
+    }
+    if (payload.embedding_model !== undefined) {
+      providerConfig.embedding_model = String(payload.embedding_model || "").trim() || null;
+    }
+  } else {
+    providerConfig.base_url = preset.base_url;
+    providerConfig.chat_model = preset.chat_model;
+    providerConfig.embedding_model = preset.embedding_model;
   }
 
   if (payload.api_key !== undefined) {
