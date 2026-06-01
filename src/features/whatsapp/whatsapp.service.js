@@ -635,6 +635,66 @@ async function removeProjectLink(projectId, linkId, ctx) {
   await link.destroy();
 }
 
+async function disconnectWhatsapp(ctx) {
+  const instance = await getActiveInstance(ctx);
+  if (!instance) {
+    throw new AppError("Nenhuma instância WhatsApp configurada", 404);
+  }
+
+  let evolutionLoggedOut = false;
+  try {
+    await evolutionClient.logoutInstance(instance.instance_name, instance.evolution_base_url);
+    evolutionLoggedOut = true;
+  } catch (error) {
+    console.warn(`[whatsapp] Falha ao desconectar na Evolution (${instance.instance_name}):`, error.message);
+  }
+
+  const clientLinksRemoved = await ClientWhatsappLink.destroy({
+    where: { tenant_id: ctx.tenantId },
+  });
+  const projectLinksRemoved = await ProjectWhatsappLink.destroy({
+    where: { tenant_id: ctx.tenantId },
+  });
+
+  await clearQrCache(instance);
+  await instance.update({ connection_state: "close" });
+
+  return {
+    disconnected: true,
+    evolution_logged_out: evolutionLoggedOut,
+    client_links_removed: clientLinksRemoved,
+    project_links_removed: projectLinksRemoved,
+    instance: {
+      id: instance.id,
+      instance_name: instance.instance_name,
+      connection_state: "close",
+    },
+  };
+}
+
+async function syncWhatsappInstancesOnStartup() {
+  if (!process.env.EVOLUTION_API_KEY) return { synced: 0 };
+
+  const instances = await WhatsappInstance.findAll({
+    where: { is_active: true },
+    order: [["updated_at", "DESC"]],
+  });
+
+  let synced = 0;
+
+  for (const instance of instances) {
+    try {
+      await refreshInstanceConnectionState(instance);
+      await configureEvolutionWebhook(instance.instance_name, instance.evolution_base_url);
+      synced += 1;
+    } catch (error) {
+      console.warn(`[whatsapp] Falha ao sincronizar na inicialização (${instance.instance_name}):`, error.message);
+    }
+  }
+
+  return { synced, total: instances.length };
+}
+
 module.exports = {
   listInstances,
   createInstance,
@@ -649,5 +709,7 @@ module.exports = {
   listProjectLinks,
   addProjectLink,
   removeProjectLink,
+  disconnectWhatsapp,
+  syncWhatsappInstancesOnStartup,
   formatPhoneDisplay,
 };

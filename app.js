@@ -52,6 +52,18 @@ async function start() {
     initSocket(server);
     console.log("Socket.io inicializado (notificações em tempo real).");
 
+    const whatsappService = require("./src/features/whatsapp/whatsapp.service");
+    whatsappService
+      .syncWhatsappInstancesOnStartup()
+      .then(({ synced, total } = {}) => {
+        if (total > 0) {
+          console.log(`WhatsApp: ${synced}/${total} instância(s) sincronizada(s) com a Evolution.`);
+        }
+      })
+      .catch((error) => {
+        console.warn("WhatsApp: falha ao sincronizar instâncias na inicialização:", error.message);
+      });
+
     server.listen(PORT, () => {
       console.log(`API: http://localhost:${PORT}${API_PREFIX}`);
       console.log(`Uploads: http://localhost:${PORT}/uploads`);

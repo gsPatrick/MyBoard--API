@@ -12,6 +12,7 @@ router.use(...requireAuth);
 
 router.get("/instances", whatsappController.listInstances);
 router.get("/setup", whatsappController.getSetup);
+router.post("/disconnect", authorize("admin", "developer"), whatsappController.disconnect);
 router.get("/chats/search", whatsappController.searchChats);
 router.post("/instances", authorize("admin", "developer"), whatsappController.createInstance);
 router.post("/instances/:id/sync", authorize("admin", "developer"), whatsappController.syncConnectionState);

@@ -74,6 +74,12 @@ const getSetup = catchAsync(async (req, res) => {
   return sendSuccess(res, data);
 });
 
+const disconnect = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappService.disconnectWhatsapp(ctx);
+  return sendSuccess(res, result);
+});
+
 const searchChats = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
   const data = await whatsappService.searchChats(ctx, {
@@ -139,6 +145,7 @@ module.exports = {
   addProjectLink,
   removeProjectLink,
   getSetup,
+  disconnect,
   searchChats,
   backfillHistory,
   evolutionWebhook,

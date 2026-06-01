@@ -100,6 +100,13 @@ async function connectionState(instanceName, baseUrl) {
   return request(`/instance/connectionState/${encodeURIComponent(instanceName)}`, { baseUrl });
 }
 
+async function logoutInstance(instanceName, baseUrl) {
+  return request(`/instance/logout/${encodeURIComponent(instanceName)}`, {
+    method: "DELETE",
+    baseUrl,
+  });
+}
+
 async function setWebhook(instanceName, payload, baseUrl) {
   const events = payload.events || [
     "MESSAGES_UPSERT",
@@ -218,6 +225,7 @@ module.exports = {
   normalizeFetchedInstances,
   connectInstance,
   connectionState,
+  logoutInstance,
   setWebhook,
   sendText,
   sendMedia,
