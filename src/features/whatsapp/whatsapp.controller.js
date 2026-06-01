@@ -66,7 +66,10 @@ const removeProjectLink = catchAsync(async (req, res) => {
 
 const getSetup = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
-  const data = await whatsappService.getWhatsappSetup(ctx);
+  const data = await whatsappService.getWhatsappSetup(ctx, {
+    statusOnly: req.query.status_only === "1" || req.query.status_only === "true",
+    refreshQr: req.query.refresh_qr === "1" || req.query.refresh_qr === "true",
+  });
   return sendSuccess(res, data);
 });
 

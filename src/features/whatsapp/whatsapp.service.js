@@ -14,6 +14,78 @@ const {
 } = require("../../rag/phone-normalizer");
 
 const DEFAULT_INSTANCE_NAME = "myboard";
+const DEFAULT_QR_TTL_MS = Number(process.env.WHATSAPP_QR_TTL_MS) || 25000;
+
+function getQrCache(instance) {
+  return instance?.settings?.qr_cache || null;
+}
+
+function isQrCacheValid(instance) {
+  const cache = getQrCache(instance);
+  if (!cache?.base64) return false;
+  return Date.now() < Number(cache.expires_at || 0);
+}
+
+function buildQrResponseFromCache(instance) {
+  const cache = getQrCache(instance);
+  if (!isQrCacheValid(instance)) return null;
+
+  return {
+    base64: cache.base64,
+    pairingCode: cache.pairing_code || null,
+    cached: true,
+    expires_at: cache.expires_at,
+  };
+}
+
+async function persistQrCache(instance, qrPayload) {
+  const fetchedAt = Date.now();
+  const expiresAt = fetchedAt + DEFAULT_QR_TTL_MS;
+  const settings = {
+    ...(instance.settings || {}),
+    qr_cache: {
+      base64: qrPayload?.base64 || null,
+      pairing_code: qrPayload?.pairingCode || null,
+      code: qrPayload?.code || null,
+      fetched_at: fetchedAt,
+      expires_at: expiresAt,
+    },
+  };
+
+  await instance.update({ settings });
+  instance.settings = settings;
+
+  return {
+    ...(qrPayload || {}),
+    cached: false,
+    expires_at: expiresAt,
+  };
+}
+
+async function clearQrCache(instance) {
+  if (!instance?.settings?.qr_cache) return;
+  const settings = { ...(instance.settings || {}) };
+  delete settings.qr_cache;
+  await instance.update({ settings });
+  instance.settings = settings;
+}
+
+async function fetchConnectQr(instance, { force = false } = {}) {
+  if (!force && isQrCacheValid(instance)) {
+    return buildQrResponseFromCache(instance);
+  }
+
+  const qrPayload = await evolutionClient.connectInstance(
+    instance.instance_name,
+    instance.evolution_base_url
+  );
+
+  if (qrPayload?.base64) {
+    return persistQrCache(instance, qrPayload);
+  }
+
+  return qrPayload;
+}
 
 function formatPhoneDisplay(digits) {
   if (!digits) return "";
@@ -223,19 +295,44 @@ async function refreshInstanceConnectionState(instance) {
   return instance;
 }
 
-async function getWhatsappSetup(ctx) {
-  const instance = await refreshInstanceConnectionState(await ensureDefaultInstance(ctx));
+async function getWhatsappSetup(ctx, options = {}) {
+  const statusOnly = Boolean(options.statusOnly);
+  const refreshQr = Boolean(options.refreshQr);
+  let instance = await refreshInstanceConnectionState(await ensureDefaultInstance(ctx));
+
+  if (instance.connection_state === "open") {
+    await clearQrCache(instance);
+    return {
+      instance: {
+        id: instance.id,
+        instance_name: instance.instance_name,
+        connection_state: instance.connection_state,
+      },
+      qr: null,
+      connected: true,
+    };
+  }
+
+  if (statusOnly) {
+    const cachedQr = buildQrResponseFromCache(instance);
+    return {
+      instance: {
+        id: instance.id,
+        instance_name: instance.instance_name,
+        connection_state: instance.connection_state,
+      },
+      qr: cachedQr,
+      connected: false,
+      qr_expired: !cachedQr,
+      qr_expires_at: cachedQr?.expires_at || getQrCache(instance)?.expires_at || null,
+    };
+  }
 
   let qr = null;
-  if (instance.connection_state !== "open") {
-    try {
-      qr = await evolutionClient.connectInstance(
-        instance.instance_name,
-        instance.evolution_base_url
-      );
-    } catch (error) {
-      qr = { error: error.message };
-    }
+  try {
+    qr = await fetchConnectQr(instance, { force: refreshQr });
+  } catch (error) {
+    qr = { error: error.message };
   }
 
   return {
@@ -245,7 +342,9 @@ async function getWhatsappSetup(ctx) {
       connection_state: instance.connection_state,
     },
     qr,
-    connected: instance.connection_state === "open",
+    connected: false,
+    qr_expired: Boolean(qr?.error),
+    qr_expires_at: qr?.expires_at || null,
   };
 }
 
@@ -341,7 +440,7 @@ async function getConnectQr(id, ctx) {
   });
   if (!instance) throw new AppError("Instância não encontrada", 404);
 
-  return evolutionClient.connectInstance(instance.instance_name, instance.evolution_base_url);
+  return fetchConnectQr(instance, { force: true });
 }
 
 async function listClientLinks(clientId, ctx) {
