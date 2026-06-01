@@ -69,6 +69,7 @@ const getSetup = catchAsync(async (req, res) => {
   const data = await whatsappService.getWhatsappSetup(ctx, {
     statusOnly: req.query.status_only === "1" || req.query.status_only === "true",
     refreshQr: req.query.refresh_qr === "1" || req.query.refresh_qr === "true",
+    phone: req.query.phone || null,
   });
   return sendSuccess(res, data);
 });

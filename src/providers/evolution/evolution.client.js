@@ -28,11 +28,17 @@ function buildHeaders() {
 
 async function request(path, options = {}) {
   const baseUrl = (options.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, "");
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method || "GET",
-    headers: buildHeaders(),
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  const timeoutMs = options.timeoutMs || 30000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: options.method || "GET",
+      headers: buildHeaders(),
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
 
   const text = await response.text();
   let payload = null;
@@ -51,6 +57,14 @@ async function request(path, options = {}) {
   }
 
   return payload;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Evolution API timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function createInstance(payload, baseUrl) {
@@ -77,8 +91,9 @@ async function findInstanceByName(instanceName, baseUrl) {
   );
 }
 
-async function connectInstance(instanceName, baseUrl) {
-  return request(`/instance/connect/${encodeURIComponent(instanceName)}`, { baseUrl });
+async function connectInstance(instanceName, baseUrl, { number } = {}) {
+  const params = number ? `?number=${encodeURIComponent(String(number).replace(/\D/g, ""))}` : "";
+  return request(`/instance/connect/${encodeURIComponent(instanceName)}${params}`, { baseUrl });
 }
 
 async function connectionState(instanceName, baseUrl) {
@@ -155,6 +170,30 @@ async function findMessages(instanceName, payload, baseUrl) {
   });
 }
 
+async function findContacts(instanceName, payload = {}, baseUrl) {
+  return request(`/chat/findContacts/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body: payload,
+    baseUrl,
+    timeoutMs: 45000,
+  });
+}
+
+async function fetchAllGroups(instanceName, baseUrl, { getParticipants = false } = {}) {
+  return request(
+    `/group/fetchAllGroups/${encodeURIComponent(instanceName)}?getParticipants=${getParticipants ? "true" : "false"}`,
+    { baseUrl, timeoutMs: 20000 }
+  );
+}
+
+async function setSettings(instanceName, payload, baseUrl) {
+  return request(`/settings/set/${encodeURIComponent(instanceName)}`, {
+    method: "POST",
+    body: payload,
+    baseUrl,
+  });
+}
+
 async function findChats(instanceName, payload = {}, baseUrl) {
   return request(`/chat/findChats/${encodeURIComponent(instanceName)}`, {
     method: "POST",
@@ -185,6 +224,9 @@ module.exports = {
   getBase64FromMediaMessage,
   downloadMedia,
   findMessages,
+  findContacts,
+  fetchAllGroups,
+  setSettings,
   findChats,
   setChatwoot,
 };

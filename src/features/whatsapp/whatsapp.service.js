@@ -22,7 +22,7 @@ function getQrCache(instance) {
 
 function isQrCacheValid(instance) {
   const cache = getQrCache(instance);
-  if (!cache?.base64) return false;
+  if (!cache?.base64 && !cache?.pairing_code) return false;
   return Date.now() < Number(cache.expires_at || 0);
 }
 
@@ -70,17 +70,18 @@ async function clearQrCache(instance) {
   instance.settings = settings;
 }
 
-async function fetchConnectQr(instance, { force = false } = {}) {
-  if (!force && isQrCacheValid(instance)) {
+async function fetchConnectQr(instance, { force = false, phone } = {}) {
+  if (!force && !phone && isQrCacheValid(instance)) {
     return buildQrResponseFromCache(instance);
   }
 
   const qrPayload = await evolutionClient.connectInstance(
     instance.instance_name,
-    instance.evolution_base_url
+    instance.evolution_base_url,
+    phone ? { number: phone } : {}
   );
 
-  if (qrPayload?.base64) {
+  if (qrPayload?.base64 || qrPayload?.pairingCode) {
     return persistQrCache(instance, qrPayload);
   }
 
@@ -186,6 +187,23 @@ async function provisionEvolutionInstance(instanceName, baseUrl, options = {}) {
 
   if (options.configure_webhook !== false) {
     await configureEvolutionWebhook(instanceName, baseUrl);
+  }
+
+  try {
+    await evolutionClient.setSettings(
+      instanceName,
+      {
+        rejectCall: false,
+        groupsIgnore: false,
+        alwaysOnline: false,
+        readMessages: false,
+        readStatus: false,
+        syncFullHistory: false,
+      },
+      baseUrl
+    );
+  } catch (error) {
+    console.warn(`[whatsapp] Falha ao aplicar settings (${instanceName}):`, error.message);
   }
 
   return remoteInstance;
@@ -298,6 +316,7 @@ async function refreshInstanceConnectionState(instance) {
 async function getWhatsappSetup(ctx, options = {}) {
   const statusOnly = Boolean(options.statusOnly);
   const refreshQr = Boolean(options.refreshQr);
+  const phone = String(options.phone || "").replace(/\D/g, "") || null;
   let instance = await refreshInstanceConnectionState(await ensureDefaultInstance(ctx));
 
   if (instance.connection_state === "open") {
@@ -330,7 +349,7 @@ async function getWhatsappSetup(ctx, options = {}) {
 
   let qr = null;
   try {
-    qr = await fetchConnectQr(instance, { force: refreshQr });
+    qr = await fetchConnectQr(instance, { force: refreshQr || Boolean(phone), phone });
   } catch (error) {
     qr = { error: error.message };
   }
@@ -356,32 +375,178 @@ function normalizeChatRecords(payload) {
   return [];
 }
 
+function resolveWhatsappJid(record = {}) {
+  const candidates = [record.remoteJid, record.jid, record.key?.remoteJid, record.id];
+  for (const value of candidates) {
+    const text = String(value || "");
+    if (text.includes("@")) return text;
+  }
+  return null;
+}
+
+function resolveContactName(record = {}) {
+  return (
+    record.pushName ||
+    record.chatName ||
+    record.name ||
+    record.verifiedName ||
+    record.subject ||
+    record.lastMessage?.pushName ||
+    null
+  );
+}
+
 function mapChatToSearchItem(chat = {}) {
-  const jid = chat.id || chat.remoteJid || chat.jid || chat.key?.remoteJid || null;
+  const jid = resolveWhatsappJid(chat);
   if (!jid) return null;
 
   if (isGroupJid(jid)) {
+    const name = resolveContactName(chat) || "Grupo";
     return {
       type: "group",
       jid,
       external_id: String(jid).split("@")[0],
-      name: chat.name || chat.subject || chat.pushName || "Grupo",
-      display: chat.name || chat.subject || "Grupo WhatsApp",
+      name,
+      display: name,
     };
   }
 
   const digits = jidToPhoneDigits(jid);
   if (!digits) return null;
 
+  const name = resolveContactName(chat);
   return {
     type: "phone",
     jid,
     external_id: digits,
     phone_digits: digits,
     phone_e164: toE164(digits),
-    name: chat.name || chat.pushName || chat.verifiedName || null,
-    display: formatPhoneDisplay(digits),
+    name,
+    display: name || formatPhoneDisplay(digits),
   };
+}
+
+function mapContactToSearchItem(contact = {}) {
+  const jid = resolveWhatsappJid(contact);
+  if (!jid || isGroupJid(jid)) return null;
+
+  const digits = jidToPhoneDigits(jid);
+  if (!digits) return null;
+
+  const name = resolveContactName(contact);
+  return {
+    type: "phone",
+    jid,
+    external_id: digits,
+    phone_digits: digits,
+    phone_e164: toE164(digits),
+    name,
+    display: name || formatPhoneDisplay(digits),
+  };
+}
+
+function mapGroupToSearchItem(group = {}) {
+  const rawId = group.id || group.groupJid || group.jid;
+  if (!rawId) return null;
+
+  const jid = String(rawId).includes("@") ? String(rawId) : `${rawId}@g.us`;
+  const name = group.subject || group.name || group.pushName || "Grupo";
+
+  return {
+    type: "group",
+    jid,
+    external_id: String(jid).split("@")[0],
+    name,
+    display: name,
+  };
+}
+
+function mergeSearchItems(items) {
+  const map = new Map();
+  for (const item of items) {
+    if (!item?.jid) continue;
+    const key = `${item.type}:${item.jid}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, item);
+      continue;
+    }
+    map.set(key, {
+      ...existing,
+      name: existing.name || item.name,
+      display: existing.display || item.display,
+    });
+  }
+  return Array.from(map.values());
+}
+
+function matchesSearchQuery(item, query, queryDigits) {
+  const haystack = [item.display, item.name, item.external_id, item.phone_digits, item.jid]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const normalizedQuery = query
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  if (haystack.includes(normalizedQuery)) return true;
+
+  const words = normalizedQuery.split(/\s+/).filter(Boolean);
+  if (words.length > 1 && words.every((word) => haystack.includes(word))) return true;
+
+  if (queryDigits && String(item.phone_digits || item.external_id || "").includes(queryDigits)) {
+    return true;
+  }
+
+  return false;
+}
+
+async function loadSearchCatalog(instance, { type = "all" } = {}) {
+  const baseUrl = instance.evolution_base_url;
+  const instanceName = instance.instance_name;
+  const includePhones = type === "all" || type === "phone";
+  const includeGroups = type === "all" || type === "group";
+
+  const tasks = [];
+
+  if (includePhones || includeGroups) {
+    tasks.push(
+      evolutionClient
+        .findChats(instanceName, { limit: 500, page: 1, offset: 500 }, baseUrl)
+        .catch(() => [])
+    );
+  }
+
+  if (includePhones) {
+    tasks.push(
+      evolutionClient.findContacts(instanceName, { where: {} }, baseUrl).catch(() => [])
+    );
+  }
+
+  if (includeGroups) {
+    tasks.push(
+      evolutionClient
+        .fetchAllGroups(instanceName, baseUrl, { getParticipants: false })
+        .catch(() => [])
+    );
+  }
+
+  const payloads = await Promise.all(tasks);
+  let cursor = 0;
+  const chatsPayload = includePhones || includeGroups ? payloads[cursor++] : null;
+  const contactsPayload = includePhones ? payloads[cursor++] : null;
+  const groupsPayload = includeGroups ? payloads[cursor++] : null;
+
+  const items = [];
+
+  items.push(...normalizeChatRecords(chatsPayload).map(mapChatToSearchItem).filter(Boolean));
+  items.push(...normalizeChatRecords(contactsPayload).map(mapContactToSearchItem).filter(Boolean));
+  items.push(...normalizeChatRecords(groupsPayload).map(mapGroupToSearchItem).filter(Boolean));
+
+  return mergeSearchItems(items);
 }
 
 async function searchChats(ctx, { q = "", type = "all", limit = 40 } = {}) {
@@ -394,44 +559,38 @@ async function searchChats(ctx, { q = "", type = "all", limit = 40 } = {}) {
     return { connected: false, results: [], message: "Escaneie o QR Code em Configurações → WhatsApp." };
   }
 
-  let payload = null;
+  const query = String(q || "").trim();
+  if (!query) {
+    return {
+      connected: true,
+      results: [],
+      message: "Digite um nome, número ou grupo e pressione Enter para buscar.",
+    };
+  }
+
+  const queryLower = query.toLowerCase();
+  const queryDigits = query.replace(/\D/g, "");
+
+  let catalog = [];
   try {
-    payload = await evolutionClient.findChats(
-      instance.instance_name,
-      { limit: Math.min(Number(limit) * 3, 120) },
-      instance.evolution_base_url
-    );
+    catalog = await loadSearchCatalog(instance, { type });
   } catch (error) {
     return { connected: true, results: [], message: error.message };
   }
 
-  const query = String(q || "")
-    .trim()
-    .toLowerCase();
-  const queryDigits = query.replace(/\D/g, "");
-
-  const results = normalizeChatRecords(payload)
-    .map(mapChatToSearchItem)
-    .filter(Boolean)
+  const results = catalog
     .filter((item) => {
       if (type === "phone" && item.type !== "phone") return false;
       if (type === "group" && item.type !== "group") return false;
-      if (!query) return true;
-
-      const haystack = [item.display, item.name, item.external_id, item.phone_digits, item.jid]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      if (haystack.includes(query)) return true;
-      if (queryDigits && String(item.phone_digits || item.external_id || "").includes(queryDigits)) {
-        return true;
-      }
-      return false;
+      return matchesSearchQuery(item, queryLower, queryDigits);
     })
     .slice(0, Math.min(Number(limit) || 40, 60));
 
-  return { connected: true, results };
+  return {
+    connected: true,
+    results,
+    message: results.length ? null : "Nenhum resultado para essa busca.",
+  };
 }
 
 async function getConnectQr(id, ctx) {
