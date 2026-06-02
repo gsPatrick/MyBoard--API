@@ -1,12 +1,11 @@
 const promptLoader = require("../../ai/prompt-loader");
 const intentRouter = require("../../ai/intent-router");
-const openRouterClient = require("../../providers/openrouter/openrouter.client");
+const aiRuntime = require("../settings/ai-runtime.service");
 const retrievalService = require("../../rag/retrieval.service");
 const bordieTools = require("./bordie-tools.service");
 const boardTools = require("./board-tools.service");
 const policyEngine = require("./policy-engine.service");
 const actionExecutor = require("./action-executor.service");
-const settingsService = require("../settings/settings.service");
 
 function buildScopeFromContext(context = {}) {
   return {
@@ -169,15 +168,10 @@ async function runChat({
 
   let reply = boardResult?.reply || "";
   if (!reply) {
-    const ai = await settingsService.resolveAiCredentials(tenantId);
-    const completion = await openRouterClient.createChatCompletion({
+    const completion = await aiRuntime.createChatCompletion(tenantId, {
       messages,
       temperature: mode === "command" ? 0.2 : 0.35,
       max_tokens: 1400,
-      apiKey: ai.apiKey,
-      baseUrl: ai.baseUrl,
-      model: ai.chatModel,
-      apiFormat: ai.apiFormat,
     });
     reply = completion.content;
   }
@@ -206,7 +200,7 @@ async function runChat({
     action: primaryAction,
     actions: actions.map((item) => item.action),
     policy_mode: policy.mode,
-    offline: !openRouterClient.isConfigured(),
+    offline: !(await aiRuntime.isConfiguredForTenant(tenantId)),
   };
 }
 

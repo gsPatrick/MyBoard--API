@@ -1,4 +1,4 @@
-const openRouterClient = require("../providers/openrouter/openrouter.client");
+const aiRuntime = require("../features/settings/ai-runtime.service");
 
 const FACT_TYPES = [
   "deal_value",
@@ -172,12 +172,13 @@ function parseJsonArray(raw) {
   }
 }
 
-async function extractFactsWithLlm(text, { maxChars = 3500 } = {}) {
+async function extractFactsWithLlm(text, { maxChars = 3500, tenantId = null } = {}) {
   const source = String(text || "").trim();
-  if (!openRouterClient.isConfigured() || source.length < 15) return [];
+  if (!tenantId || source.length < 15) return [];
+  if (!(await aiRuntime.isConfiguredForTenant(tenantId))) return [];
 
   try {
-    const response = await openRouterClient.createChatCompletion({
+    const response = await aiRuntime.createChatCompletion(tenantId, {
       messages: [
         { role: "system", content: buildLlmExtractionInstruction() },
         { role: "user", content: source.slice(0, maxChars) },

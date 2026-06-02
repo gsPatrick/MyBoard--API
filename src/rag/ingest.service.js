@@ -15,9 +15,9 @@ const mediaProcessorService = require("./media-processor.service");
 const messageOptimizer = require("./message-optimizer.service");
 const evolutionClient = require("../providers/evolution/evolution.client");
 
-async function resolveEmbeddingFields(text) {
+async function resolveEmbeddingFields(text, tenantId) {
   try {
-    const embedded = await createEmbedding(text);
+    const embedded = await createEmbedding(text, tenantId);
     if (!embedded) {
       return { embedding: null, embedding_model: null, embedding_vector: null };
     }
@@ -40,7 +40,7 @@ async function appendSingleMessageChunk(conversation, message) {
 
   let embeddingFields = { embedding: null, embedding_model: null, embedding_vector: null };
   try {
-    embeddingFields = await resolveEmbeddingFields(line);
+    embeddingFields = await resolveEmbeddingFields(line, conversation.tenant_id);
   } catch (error) {
     console.warn("[RAG] embedding incremental falhou:", error.message);
   }
@@ -92,7 +92,7 @@ async function indexConversationMessages(conversationId, options = {}) {
   let chunksCreated = 0;
 
   for (const chunk of builtChunks) {
-    const embeddingFields = await resolveEmbeddingFields(chunk.content);
+    const embeddingFields = await resolveEmbeddingFields(chunk.content, conversation.tenant_id);
 
     await RagChunk.create(
       {
@@ -318,7 +318,7 @@ async function ingestWorkspaceDocument({
     });
 
     for (const chunk of chunks) {
-      const embeddingFields = await resolveEmbeddingFields(chunk.content);
+      const embeddingFields = await resolveEmbeddingFields(chunk.content, tenantId);
 
       await RagChunk.create(
         {

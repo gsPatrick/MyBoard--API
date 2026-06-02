@@ -1,5 +1,5 @@
 const boardsService = require("../boards/boards.service");
-const openRouterClient = require("../../providers/openrouter/openrouter.client");
+const aiRuntime = require("../settings/ai-runtime.service");
 const {
   buildElementsFromSpec,
   normalizeIncomingElement,
@@ -211,7 +211,8 @@ async function runBoardAgent({ message, boardId, sceneData, history = [], ctx })
     { role: "user", content: message },
   ];
 
-  const completion = await openRouterClient.createChatCompletion({
+  const tenantId = ctx?.tenantId;
+  const completion = await aiRuntime.createChatCompletion(tenantId, {
     messages,
     tools,
     temperature: 0.35,

@@ -1,7 +1,7 @@
 const { Op, Sequelize } = require("sequelize");
 const { RagChunk, RagSummary, sequelize } = require("../models");
 const { createEmbedding, cosineSimilarity, isConfigured } = require("./embedding.service");
-const openRouterClient = require("../providers/openrouter/openrouter.client");
+const aiRuntime = require("../features/settings/ai-runtime.service");
 const promptLoader = require("../ai/prompt-loader");
 const { expandQuery } = require("./query-expansion.service");
 const factsRetrieval = require("./facts-retrieval.service");
@@ -88,9 +88,9 @@ async function fuzzySearch(tenantId, query, scope = {}, limit = 8) {
 }
 
 async function vectorSearch(tenantId, query, scope = {}, limit = 12) {
-  if (!isConfigured()) return [];
+  if (!(await isConfigured(tenantId))) return [];
 
-  const embedded = await createEmbedding(query);
+  const embedded = await createEmbedding(query, tenantId);
   if (!embedded) return [];
 
   const { toPgVectorLiteral, cosineSimilarity } = require("./embedding.service");
@@ -266,13 +266,14 @@ async function fetchSummaries(tenantId, scope = {}, limit = 4) {
   }));
 }
 
-async function rewriteQuery(query, scope = {}) {
+async function rewriteQuery(query, scope = {}, tenantId = null) {
   const trimmed = String(query || "").trim();
-  if (!trimmed || !openRouterClient.isConfigured()) return trimmed;
+  if (!trimmed || !tenantId) return trimmed;
+  if (!(await aiRuntime.isConfiguredForTenant(tenantId))) return trimmed;
 
   try {
     const systemPrompt = promptLoader.loadPrompt("rag/query_rewrite");
-    const response = await openRouterClient.createChatCompletion({
+    const response = await aiRuntime.createChatCompletion(tenantId, {
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -292,8 +293,8 @@ async function rewriteQuery(query, scope = {}) {
 }
 
 async function searchKnowledge({ tenantId, query, scope = {}, limit = 12 }) {
-  const rewritten = await rewriteQuery(query, scope);
-  const queries = await expandQuery(rewritten, scope);
+  const rewritten = await rewriteQuery(query, scope, tenantId);
+  const queries = await expandQuery(rewritten, scope, tenantId);
 
   const searchJobs = queries.flatMap((q) => [
     fullTextSearch(tenantId, q, scope, limit),

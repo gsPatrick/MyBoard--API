@@ -13,7 +13,7 @@ async function upsertFacts({
   extraFacts = [],
   skipLlm = false,
 }) {
-  const merged = await extractAllFacts(text, { extraFacts, skipLlm });
+  const merged = await extractAllFacts(text, { extraFacts, skipLlm, tenantId });
   const saved = [];
 
   for (const fact of merged) {

@@ -5,7 +5,7 @@ const pdfParse = require("pdf-parse");
 const { RagMessageAsset, MediaFile } = require("../models");
 const localStorage = require("../providers/storage/local-storage.provider");
 const { estimateTokens } = require("./token-estimate");
-const openRouterClient = require("../providers/openrouter/openrouter.client");
+const aiRuntime = require("../features/settings/ai-runtime.service");
 
 const CONTRACT_NAME_REGEX = /contrato|contract|proposta|acordo|termo/i;
 
@@ -77,14 +77,19 @@ async function extractPdfText(buffer) {
   }
 }
 
-async function transcribeAudio(buffer, mimeType, fileName) {
-  if (!openRouterClient.isConfigured()) {
+async function transcribeAudio(buffer, mimeType, fileName, tenantId) {
+  if (!tenantId || !(await aiRuntime.isConfiguredForTenant(tenantId))) {
     return `[Áudio: ${fileName || "sem nome"} — transcrição indisponível]`;
+  }
+
+  const ai = await aiRuntime.getCredentials(tenantId);
+  if (ai.apiFormat !== "openai") {
+    return `[Áudio: ${fileName || "sem nome"} — transcrição disponível apenas com provedor OpenAI-compatível]`;
   }
 
   try {
     const base64 = buffer.toString("base64");
-    const response = await openRouterClient.createChatCompletion({
+    const response = await aiRuntime.createChatCompletion(tenantId, {
       messages: [
         {
           role: "user",
@@ -100,7 +105,7 @@ async function transcribeAudio(buffer, mimeType, fileName) {
           ],
         },
       ],
-      model: process.env.OPENROUTER_AUDIO_MODEL || undefined,
+      model: ai.chatModel,
       temperature: 0,
       max_tokens: 1200,
     });
@@ -194,10 +199,10 @@ async function processMessageMedia({
       extractedText = `${extractedText}\n\n${pdfText}`.trim();
     }
   } else if (descriptor.assetType === "audio") {
-    const transcription = await transcribeAudio(buffer, descriptor.mimeType, descriptor.fileName);
+    const transcription = await transcribeAudio(buffer, descriptor.mimeType, descriptor.fileName, tenantId);
     extractedText = transcription || extractedText;
     buffer = null;
-  } else if (descriptor.assetType === "image" && openRouterClient.isConfigured()) {
+  } else if (descriptor.assetType === "image" && (await aiRuntime.isConfiguredForTenant(tenantId))) {
     extractedText =
       extractedText ||
       `[Imagem: ${descriptor.fileName}${descriptor.caption ? ` — ${descriptor.caption}` : ""}]`;

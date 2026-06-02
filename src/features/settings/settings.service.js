@@ -1,7 +1,7 @@
 const { Tenant, WhatsappInstance } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { resolveTenantIdForWrite } = require("../../utils/request-context");
-const openRouterClient = require("../../providers/openrouter/openrouter.client");
+const aiRuntime = require("./ai-runtime.service");
 const policyEngine = require("../bordie/policy-engine.service");
 const {
   AI_PROVIDER_IDS,
@@ -53,7 +53,6 @@ function sanitizeAiSettings(ai = {}) {
   }, {});
 
   const hasActiveKey = Boolean(activeConfig.api_key);
-  const envFallback = openRouterClient.isConfigured();
 
   return {
     active_provider: activeProvider,
@@ -65,7 +64,7 @@ function sanitizeAiSettings(ai = {}) {
       activeConfig.embedding_model ?? AI_PROVIDER_PRESETS[activeProvider].embedding_model,
     has_api_key: hasActiveKey,
     api_key_masked: hasActiveKey ? maskSecret(activeConfig.api_key) : null,
-    configured: hasActiveKey || envFallback,
+    configured: hasActiveKey,
   };
 }
 
@@ -244,11 +243,7 @@ async function testAiConnection(ctx) {
   }
 
   try {
-    const response = await openRouterClient.createChatCompletion({
-      apiKey: credentials.apiKey,
-      baseUrl: credentials.baseUrl,
-      model: credentials.chatModel,
-      apiFormat: credentials.apiFormat,
+    const response = await aiRuntime.createChatCompletion(tenant.id, {
       messages: [{ role: "user", content: "Responda apenas: ok" }],
       max_tokens: 8,
       temperature: 0,
@@ -282,19 +277,13 @@ async function resolveAiCredentials(tenantId) {
   const config = migrated.providers[provider] || {};
   const preset = AI_PROVIDER_PRESETS[provider];
 
-  const envKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || null;
-
   return {
     provider,
     apiFormat: preset.api_format,
-    apiKey: config.api_key || envKey,
-    baseUrl: config.base_url || preset.base_url || process.env.OPENROUTER_BASE_URL || null,
-    chatModel: config.chat_model || preset.chat_model || process.env.OPENROUTER_CHAT_MODEL || null,
-    embeddingModel:
-      config.embedding_model ??
-      preset.embedding_model ??
-      process.env.OPENROUTER_EMBEDDING_MODEL ??
-      null,
+    apiKey: config.api_key || null,
+    baseUrl: config.base_url || preset.base_url || null,
+    chatModel: config.chat_model || preset.chat_model || null,
+    embeddingModel: config.embedding_model ?? preset.embedding_model ?? null,
   };
 }
 

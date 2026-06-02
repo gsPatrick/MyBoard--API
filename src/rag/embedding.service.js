@@ -1,11 +1,4 @@
-const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
-const OPENROUTER_EMBEDDING_MODEL =
-  process.env.OPENROUTER_EMBEDDING_MODEL || "openai/text-embedding-3-small";
-const EMBEDDING_DIMENSIONS = Number(process.env.OPENROUTER_EMBEDDING_DIMENSIONS || 1536);
-
-function isConfigured() {
-  return Boolean(process.env.OPENROUTER_API_KEY);
-}
+const aiRuntime = require("../features/settings/ai-runtime.service");
 
 function toPgVectorLiteral(vector) {
   if (!Array.isArray(vector) || !vector.length) return null;
@@ -23,40 +16,16 @@ function buildEmbeddingFields(vector) {
   };
 }
 
-async function createEmbedding(input) {
+async function isConfigured(tenantId) {
+  if (!tenantId) return false;
+  const credentials = await aiRuntime.getCredentials(tenantId);
+  return aiRuntime.supportsEmbeddings(credentials);
+}
+
+async function createEmbedding(input, tenantId) {
   const text = String(input || "").trim();
-  if (!text) return null;
-  if (!isConfigured()) return null;
-
-  const response = await fetch(`${OPENROUTER_BASE_URL}/embeddings`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": process.env.APP_URL || "http://localhost:3000",
-      "X-Title": "MyBoard Bordie RAG",
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_EMBEDDING_MODEL,
-      input: text,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Embedding falhou (${response.status}): ${errorText.slice(0, 240)}`);
-  }
-
-  const payload = await response.json();
-  const vector = payload?.data?.[0]?.embedding;
-  if (!Array.isArray(vector) || !vector.length) {
-    throw new Error("Embedding vazio");
-  }
-
-  return {
-    model: OPENROUTER_EMBEDDING_MODEL,
-    vector,
-  };
+  if (!text || !tenantId) return null;
+  return aiRuntime.createEmbedding(tenantId, text);
 }
 
 function cosineSimilarity(a, b) {
@@ -79,8 +48,7 @@ function cosineSimilarity(a, b) {
 }
 
 module.exports = {
-  OPENROUTER_EMBEDDING_MODEL,
-  EMBEDDING_DIMENSIONS,
+  EMBEDDING_DIMENSIONS: aiRuntime.EMBEDDING_DIMENSIONS,
   isConfigured,
   createEmbedding,
   cosineSimilarity,

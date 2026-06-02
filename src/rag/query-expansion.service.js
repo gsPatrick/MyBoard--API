@@ -1,4 +1,4 @@
-const openRouterClient = require("../providers/openrouter/openrouter.client");
+const aiRuntime = require("../features/settings/ai-runtime.service");
 const promptLoader = require("../ai/prompt-loader");
 
 const SYNONYM_EXPANSIONS = [
@@ -23,13 +23,13 @@ function heuristicExpansions(query) {
   return Array.from(variants).slice(0, 4);
 }
 
-async function expandQuery(query, scope = {}) {
+async function expandQuery(query, scope = {}, tenantId = null) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return [trimmed];
 
   const heuristic = heuristicExpansions(trimmed);
 
-  if (!openRouterClient.isConfigured()) {
+  if (!tenantId || !(await aiRuntime.isConfiguredForTenant(tenantId))) {
     return heuristic;
   }
 
@@ -38,7 +38,7 @@ async function expandQuery(query, scope = {}) {
       promptLoader.loadPrompt("rag/query_rewrite") +
       "\n\nGere até 3 reformulações curtas da pergunta para busca semântica. Retorne JSON array de strings.";
 
-    const response = await openRouterClient.createChatCompletion({
+    const response = await aiRuntime.createChatCompletion(tenantId, {
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify({ query: trimmed, scope }) },

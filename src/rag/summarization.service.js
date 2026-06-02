@@ -1,7 +1,4 @@
-const { createEmbedding, cosineSimilarity, isConfigured } = require("./embedding.service");
-const { RagSummary, sequelize } = require("../models");
-const { estimateTokens } = require("./token-estimate");
-const openRouterClient = require("../providers/openrouter/openrouter.client");
+const aiRuntime = require("../features/settings/ai-runtime.service");
 const promptLoader = require("../ai/prompt-loader");
 
 const SUMMARY_LEVELS = {
@@ -11,16 +8,16 @@ const SUMMARY_LEVELS = {
   CLIENT: "client",
 };
 
-async function summarizeText(content, mode = "thread") {
+async function summarizeText(content, mode = "thread", tenantId = null) {
   const trimmed = String(content || "").trim();
   if (!trimmed) return "";
 
-  if (!openRouterClient.isConfigured()) {
+  if (!tenantId || !(await aiRuntime.isConfiguredForTenant(tenantId))) {
     return trimmed.length > 1200 ? `${trimmed.slice(0, 1200)}…` : trimmed;
   }
 
   const systemPrompt = promptLoader.loadPrompt("rag/synthesize");
-  const response = await openRouterClient.createChatCompletion({
+  const response = await aiRuntime.createChatCompletion(tenantId, {
     messages: [
       { role: "system", content: systemPrompt },
       {
@@ -47,6 +44,9 @@ async function upsertSummary({
   periodEnd = null,
   transaction = null,
 }) {
+  const { RagSummary } = require("../models");
+  const { estimateTokens } = require("./token-estimate");
+
   const where = {
     tenant_id: tenantId,
     level,
@@ -85,7 +85,7 @@ async function refreshConversationSummaries(conversation, options = {}) {
   if (!latestChunks.length) return null;
 
   const merged = latestChunks.map((chunk) => chunk.content).join("\n\n");
-  const threadSummary = await summarizeText(merged, SUMMARY_LEVELS.THREAD);
+  const threadSummary = await summarizeText(merged, SUMMARY_LEVELS.THREAD, conversation.tenant_id);
 
   return upsertSummary({
     tenantId: conversation.tenant_id,
