@@ -3,6 +3,7 @@ const { sendSuccess, sendCreated, sendNoContent } = require("../../utils/respons
 const { buildServiceContext } = require("../../utils/request-context");
 const whatsappService = require("./whatsapp.service");
 const whatsappIngestService = require("./whatsapp-ingest.service");
+const whatsappConversationsService = require("./whatsapp-conversations.service");
 
 const listInstances = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
@@ -90,6 +91,33 @@ const searchChats = catchAsync(async (req, res) => {
   return sendSuccess(res, data);
 });
 
+const listClientThreads = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const threads = await whatsappConversationsService.listClientThreads(req.params.clientId, ctx);
+  return sendSuccess(res, threads);
+});
+
+const listProjectThreads = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const threads = await whatsappConversationsService.listProjectThreads(req.params.projectId, ctx);
+  return sendSuccess(res, threads);
+});
+
+const listConversationMessages = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const data = await whatsappConversationsService.listConversationMessages(
+    req.params.conversationId,
+    ctx,
+    {
+      limit: req.query.limit,
+      before: req.query.before,
+      clientId: req.query.client_id || null,
+      projectId: req.query.project_id || null,
+    }
+  );
+  return sendSuccess(res, data);
+});
+
 const backfillHistory = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
   const backfillService = require("./whatsapp-backfill.service");
@@ -147,6 +175,9 @@ module.exports = {
   getSetup,
   disconnect,
   searchChats,
+  listClientThreads,
+  listProjectThreads,
+  listConversationMessages,
   backfillHistory,
   evolutionWebhook,
   chatwootWebhook,
