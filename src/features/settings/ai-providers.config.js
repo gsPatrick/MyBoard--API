@@ -36,17 +36,51 @@ const AI_PROVIDER_PRESETS = {
   },
   custom: {
     id: "custom",
-    label: "Agente / CLI",
+    label: "Proxy / CLI",
     api_format: "openai",
-    base_url: "https://openrouter.ai/api/v1",
-    chat_model: "openai/gpt-4o-mini",
-    embedding_model: "openai/text-embedding-3-small",
-    key_hint: "Token da API ou do agente",
+    base_url: "http://localhost:8317",
+    chat_model: "gemini-2.5-pro",
+    embedding_model: "text-embedding-3-small",
+    key_hint: "your-api-key-1",
     docs_url: null,
     description:
-      "Qualquer API compatível com OpenAI — OpenRouter, proxy local, token de agente CLI, etc.",
+      "CLIProxyAPI ou gateway compatível OpenAI (/v1). Informe host:porta, Bearer token e model id listado em GET /v1/models.",
   },
 };
+
+function stripTrailingSlashes(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+/**
+ * Normaliza a URL do modo custom para a superfície OpenAI do CLIProxyAPI:
+ * http://host:8317  →  http://host:8317/v1
+ * Requisições: POST {base}/chat/completions e POST {base}/embeddings com Authorization: Bearer
+ */
+function normalizeCustomOpenAiBaseUrl(rawUrl) {
+  let url = stripTrailingSlashes(rawUrl);
+  if (!url) return "http://localhost:8317/v1";
+
+  url = url.replace(/\/chat\/completions$/i, "");
+  url = url.replace(/\/embeddings$/i, "");
+  url = url.replace(/\/messages$/i, "");
+  url = stripTrailingSlashes(url);
+
+  if (!/\/v1$/i.test(url)) {
+    url = `${url}/v1`;
+  }
+
+  return url;
+}
+
+function resolveProviderBaseUrl(providerId, config = {}) {
+  const preset = AI_PROVIDER_PRESETS[providerId];
+  const raw = config.base_url || preset.base_url || null;
+  if (providerId === "custom") {
+    return normalizeCustomOpenAiBaseUrl(raw);
+  }
+  return stripTrailingSlashes(raw);
+}
 
 function normalizeProviderId(value) {
   const id = String(value || "gpt").toLowerCase();
@@ -110,4 +144,7 @@ module.exports = {
   normalizeProviderId,
   buildDefaultProviders,
   migrateLegacyAiSettings,
+  normalizeCustomOpenAiBaseUrl,
+  resolveProviderBaseUrl,
+  stripTrailingSlashes,
 };

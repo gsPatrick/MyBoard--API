@@ -14,15 +14,17 @@ async function createChatCompletion({
   apiKey = null,
   baseUrl = null,
   apiFormat = "openai",
+  provider = null,
 }) {
   const resolvedKey = apiKey || process.env.OPENROUTER_API_KEY;
-  const resolvedBase = (baseUrl || OPENROUTER_BASE_URL).replace(/\/$/, "");
+  const resolvedBase = String(baseUrl || OPENROUTER_BASE_URL).replace(/\/$/, "");
 
   if (!resolvedKey) {
     const lastUser = [...messages].reverse().find((item) => item.role === "user");
     return {
       content: `IA não configurada. Entrada recebida: ${lastUser?.content || "…"}`,
       raw: null,
+      tool_calls: [],
     };
   }
 
@@ -34,6 +36,7 @@ async function createChatCompletion({
       max_tokens,
       apiKey: resolvedKey,
       baseUrl: resolvedBase,
+      provider,
     });
   }
 
@@ -86,6 +89,7 @@ async function createAnthropicChatCompletion({
   max_tokens = 1200,
   apiKey,
   baseUrl,
+  provider = null,
 }) {
   const systemParts = messages.filter((item) => item.role === "system").map((item) => item.content);
   const conversation = messages
@@ -95,13 +99,20 @@ async function createAnthropicChatCompletion({
       content: String(item.content || ""),
     }));
 
+  const headers = {
+    "anthropic-version": "2023-06-01",
+    "Content-Type": "application/json",
+  };
+
+  if (provider === "custom") {
+    headers.Authorization = `Bearer ${apiKey}`;
+  } else {
+    headers["x-api-key"] = apiKey;
+  }
+
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/messages`, {
     method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       model: model || "claude-sonnet-4-20250514",
       max_tokens: max_tokens || 1200,

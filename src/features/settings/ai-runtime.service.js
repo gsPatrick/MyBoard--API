@@ -1,7 +1,29 @@
 const settingsService = require("./settings.service");
 const llmClient = require("../../providers/openrouter/openrouter.client");
+const { normalizeCustomOpenAiBaseUrl } = require("./ai-providers.config");
 
 const EMBEDDING_DIMENSIONS = Number(process.env.OPENROUTER_EMBEDDING_DIMENSIONS || 1536);
+
+function buildOpenAiSurfaceHeaders(apiKey, baseUrl) {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+
+  if (String(baseUrl || "").includes("openrouter.ai")) {
+    headers["HTTP-Referer"] = process.env.APP_URL || "http://localhost:3000";
+    headers["X-Title"] = "MyBoard";
+  }
+
+  return headers;
+}
+
+function resolveOpenAiSurfaceBaseUrl(credentials) {
+  if (credentials.provider === "custom") {
+    return normalizeCustomOpenAiBaseUrl(credentials.baseUrl);
+  }
+  return String(credentials.baseUrl || "").replace(/\/$/, "");
+}
 
 async function getCredentials(tenantId) {
   if (!tenantId) return null;
@@ -33,12 +55,15 @@ async function createChatCompletion(tenantId, options = {}) {
     };
   }
 
+  const baseUrl = resolveOpenAiSurfaceBaseUrl(ai);
+
   return llmClient.createChatCompletion({
     ...options,
     apiKey: ai.apiKey,
-    baseUrl: ai.baseUrl,
+    baseUrl,
     model: options.model || ai.chatModel,
     apiFormat: ai.apiFormat,
+    provider: ai.provider,
   });
 }
 
@@ -49,16 +74,8 @@ async function createEmbedding(tenantId, input) {
   const ai = await getCredentials(tenantId);
   if (!supportsEmbeddings(ai)) return null;
 
-  const baseUrl = String(ai.baseUrl || "").replace(/\/$/, "");
-  const headers = {
-    Authorization: `Bearer ${ai.apiKey}`,
-    "Content-Type": "application/json",
-  };
-
-  if (baseUrl.includes("openrouter.ai")) {
-    headers["HTTP-Referer"] = process.env.APP_URL || "http://localhost:3000";
-    headers["X-Title"] = "MyBoard RAG";
-  }
+  const baseUrl = resolveOpenAiSurfaceBaseUrl(ai);
+  const headers = buildOpenAiSurfaceHeaders(ai.apiKey, baseUrl);
 
   const response = await fetch(`${baseUrl}/embeddings`, {
     method: "POST",
@@ -94,4 +111,6 @@ module.exports = {
   supportsEmbeddings,
   createChatCompletion,
   createEmbedding,
+  resolveOpenAiSurfaceBaseUrl,
+  buildOpenAiSurfaceHeaders,
 };

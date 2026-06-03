@@ -8,6 +8,8 @@ const {
   AI_PROVIDER_PRESETS,
   normalizeProviderId,
   migrateLegacyAiSettings,
+  normalizeCustomOpenAiBaseUrl,
+  resolveProviderBaseUrl,
 } = require("./ai-providers.config");
 
 const DEFAULT_PRIVACY = {
@@ -25,12 +27,17 @@ function maskSecret(value) {
 function sanitizeProviderConfig(providerId, config = {}) {
   const preset = AI_PROVIDER_PRESETS[providerId];
   const hasKey = Boolean(config.api_key);
+  const baseUrl =
+    providerId === "custom"
+      ? normalizeCustomOpenAiBaseUrl(config.base_url || preset.base_url)
+      : config.base_url || preset.base_url;
+
   return {
     id: providerId,
     label: preset.label,
     enabled: Boolean(config.enabled),
     api_format: preset.api_format,
-    base_url: config.base_url || preset.base_url,
+    base_url: baseUrl,
     chat_model: config.chat_model || preset.chat_model,
     embedding_model: config.embedding_model ?? preset.embedding_model,
     has_api_key: hasKey,
@@ -140,7 +147,9 @@ async function updateAiSettings(payload, ctx) {
 
   if (isCustom) {
     if (payload.base_url !== undefined) {
-      providerConfig.base_url = String(payload.base_url || "").trim() || preset.base_url;
+      providerConfig.base_url = normalizeCustomOpenAiBaseUrl(
+        String(payload.base_url || "").trim() || preset.base_url
+      );
     }
     if (payload.chat_model !== undefined) {
       providerConfig.chat_model = String(payload.chat_model || "").trim() || preset.chat_model;
@@ -281,7 +290,7 @@ async function resolveAiCredentials(tenantId) {
     provider,
     apiFormat: preset.api_format,
     apiKey: config.api_key || null,
-    baseUrl: config.base_url || preset.base_url || null,
+    baseUrl: resolveProviderBaseUrl(provider, config),
     chatModel: config.chat_model || preset.chat_model || null,
     embeddingModel: config.embedding_model ?? preset.embedding_model ?? null,
   };
