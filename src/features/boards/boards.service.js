@@ -196,4 +196,5 @@ module.exports = {
   createBoard,
   updateBoard,
   deleteBoard,
+  normalizeSceneData,
 };
