@@ -1,10 +1,3 @@
-const CUSTOM_API_SURFACES = ["openai", "anthropic", "gemini"];
-
-function normalizeApiSurface(value) {
-  const id = String(value || "openai").toLowerCase();
-  return CUSTOM_API_SURFACES.includes(id) ? id : "openai";
-}
-
 function stripTrailingSlashes(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
@@ -28,66 +21,17 @@ function normalizeProxyRoot(rawUrl) {
   return url || "http://localhost:8317";
 }
 
-function resolveSurfaceBaseUrl(proxyRoot, apiSurface) {
+function resolveSurfaceBaseUrl(proxyRoot, apiSurface = "openai") {
   const root = normalizeProxyRoot(proxyRoot);
   if (apiSurface === "gemini") return `${root}/v1beta`;
   return `${root}/v1`;
 }
 
-function buildProxyAuthHeaders(apiKey, apiSurface) {
-  const headers = { "Content-Type": "application/json" };
-
-  if (apiSurface === "gemini") {
-    headers.Authorization = `Bearer ${apiKey}`;
-    headers["X-Goog-Api-Key"] = apiKey;
-  } else if (apiSurface === "anthropic") {
-    headers.Authorization = `Bearer ${apiKey}`;
-    headers["x-api-key"] = apiKey;
-    headers["anthropic-version"] = "2023-06-01";
-  } else {
-    headers.Authorization = `Bearer ${apiKey}`;
-  }
-
-  return headers;
-}
-
-function openAiMessagesToGeminiContents(messages = []) {
-  const systemParts = messages
-    .filter((item) => item.role === "system")
-    .map((item) => String(item.content || ""))
-    .filter(Boolean);
-
-  const contents = [];
-
-  for (const message of messages) {
-    if (message.role === "system") continue;
-
-    const role = message.role === "assistant" ? "model" : "user";
-    const text = String(message.content || "").trim();
-    if (!text) continue;
-
-    contents.push({
-      role,
-      parts: [{ text }],
-    });
-  }
-
-  if (systemParts.length && contents.length) {
-    const firstUser = contents.find((item) => item.role === "user");
-    if (firstUser?.parts?.[0]) {
-      firstUser.parts[0].text = `${systemParts.join("\n\n")}\n\n${firstUser.parts[0].text}`.trim();
-    }
-  }
-
-  return contents;
-}
-
-function extractGeminiText(payload) {
-  const parts = payload?.candidates?.[0]?.content?.parts || [];
-  return parts
-    .map((part) => part.text || "")
-    .join("")
-    .trim();
+function buildProxyAuthHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
 }
 
 async function createOpenAiSurfaceChat({
@@ -113,13 +57,13 @@ async function createOpenAiSurfaceChat({
 
   const response = await fetch(`${stripTrailingSlashes(baseUrl)}/chat/completions`, {
     method: "POST",
-    headers: buildProxyAuthHeaders(apiKey, "openai"),
+    headers: buildProxyAuthHeaders(apiKey),
     body: JSON.stringify(body),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Proxy OpenAI falhou (${response.status}): ${errorText.slice(0, 240)}`);
+    throw new Error(`Proxy falhou (${response.status}): ${errorText.slice(0, 240)}`);
   }
 
   const payload = await response.json();
@@ -132,94 +76,7 @@ async function createOpenAiSurfaceChat({
   };
 }
 
-async function createAnthropicSurfaceChat({
-  baseUrl,
-  apiKey,
-  model,
-  messages,
-  temperature = 0.3,
-  max_tokens = 1200,
-}) {
-  const systemParts = messages.filter((item) => item.role === "system").map((item) => item.content);
-  const conversation = messages
-    .filter((item) => item.role !== "system")
-    .map((item) => ({
-      role: item.role === "assistant" ? "assistant" : "user",
-      content: String(item.content || ""),
-    }));
-
-  const response = await fetch(`${stripTrailingSlashes(baseUrl)}/messages`, {
-    method: "POST",
-    headers: buildProxyAuthHeaders(apiKey, "anthropic"),
-    body: JSON.stringify({
-      model,
-      max_tokens: max_tokens || 1200,
-      temperature,
-      system: systemParts.length ? systemParts.join("\n\n") : undefined,
-      messages: conversation,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Proxy Claude falhou (${response.status}): ${errorText.slice(0, 240)}`);
-  }
-
-  const payload = await response.json();
-  const textBlock = Array.isArray(payload.content)
-    ? payload.content.find((block) => block.type === "text")
-    : null;
-
-  return {
-    content: textBlock?.text || "",
-    tool_calls: [],
-    raw: payload,
-  };
-}
-
-async function createGeminiSurfaceChat({
-  baseUrl,
-  apiKey,
-  model,
-  messages,
-  temperature = 0.3,
-  max_tokens = 1200,
-}) {
-  const contents = openAiMessagesToGeminiContents(messages);
-  if (!contents.length) {
-    return { content: "", tool_calls: [], raw: null };
-  }
-
-  const url = `${stripTrailingSlashes(baseUrl)}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: buildProxyAuthHeaders(apiKey, "gemini"),
-    body: JSON.stringify({
-      contents,
-      generationConfig: {
-        temperature,
-        maxOutputTokens: max_tokens || 1200,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Proxy Gemini falhou (${response.status}): ${errorText.slice(0, 240)}`);
-  }
-
-  const payload = await response.json();
-
-  return {
-    content: extractGeminiText(payload),
-    tool_calls: [],
-    raw: payload,
-  };
-}
-
 async function createChatCompletion({
-  apiSurface = "openai",
   proxyRoot,
   baseUrl,
   apiKey,
@@ -229,46 +86,11 @@ async function createChatCompletion({
   max_tokens = 1200,
   tools = null,
 }) {
-  const surface = normalizeApiSurface(apiSurface);
   const root = normalizeProxyRoot(proxyRoot || baseUrl);
-  const resolvedBase = baseUrl || resolveSurfaceBaseUrl(root, surface);
-
-  if (tools?.length && surface !== "openai") {
-    return createOpenAiSurfaceChat({
-      baseUrl: resolveSurfaceBaseUrl(root, "openai"),
-      apiKey,
-      model,
-      messages,
-      temperature,
-      max_tokens,
-      tools,
-    });
-  }
-
-  if (surface === "anthropic") {
-    return createAnthropicSurfaceChat({
-      baseUrl: resolvedBase,
-      apiKey,
-      model,
-      messages,
-      temperature,
-      max_tokens,
-    });
-  }
-
-  if (surface === "gemini") {
-    return createGeminiSurfaceChat({
-      baseUrl: resolvedBase,
-      apiKey,
-      model,
-      messages,
-      temperature,
-      max_tokens,
-    });
-  }
+  const openAiBase = baseUrl || resolveSurfaceBaseUrl(root, "openai");
 
   return createOpenAiSurfaceChat({
-    baseUrl: resolvedBase,
+    baseUrl: openAiBase,
     apiKey,
     model,
     messages,
@@ -279,9 +101,8 @@ async function createChatCompletion({
 }
 
 module.exports = {
-  CUSTOM_API_SURFACES,
-  normalizeApiSurface,
   normalizeProxyRoot,
   resolveSurfaceBaseUrl,
+  createOpenAiSurfaceChat,
   createChatCompletion,
 };

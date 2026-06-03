@@ -1,23 +1,5 @@
 const AI_PROVIDER_IDS = ["gpt", "claude", "gemini", "custom"];
 
-const CUSTOM_API_SURFACE_PRESETS = {
-  openai: {
-    id: "openai",
-    label: "OpenAI (GPT)",
-    chat_model: "gpt-4o-mini",
-  },
-  anthropic: {
-    id: "anthropic",
-    label: "Claude",
-    chat_model: "claude-sonnet-4-5-20250929",
-  },
-  gemini: {
-    id: "gemini",
-    label: "Gemini",
-    chat_model: "gemini-2.5-pro",
-  },
-};
-
 const AI_PROVIDER_PRESETS = {
   gpt: {
     id: "gpt",
@@ -56,18 +38,16 @@ const AI_PROVIDER_PRESETS = {
     id: "custom",
     label: "Proxy / CLI",
     api_format: "openai",
-    api_surface: "openai",
     base_url: "http://localhost:8317",
-    chat_model: CUSTOM_API_SURFACE_PRESETS.openai.chat_model,
+    chat_model: "gemini-2.5-pro",
     embedding_model: null,
     key_hint: "your-api-key-1",
     docs_url: null,
     description:
-      "CLIProxyAPI: escolha a superfície (GPT / Claude / Gemini), endpoint, token e model id do proxy.",
+      "CLIProxyAPI: URL da API, Bearer token (api-keys) e model id de GET /v1/models.",
   },
 };
 
-/** Embeddings RAG no modo custom — Gemini direto (gratuito), fora do proxy */
 const FIXED_GEMINI_EMBEDDING = {
   provider: "gemini",
   api_format: "openai",
@@ -77,11 +57,6 @@ const FIXED_GEMINI_EMBEDDING = {
 
 function stripTrailingSlashes(value) {
   return String(value || "").trim().replace(/\/+$/, "");
-}
-
-function normalizeCustomApiSurface(value) {
-  const id = String(value || "openai").toLowerCase();
-  return CUSTOM_API_SURFACE_PRESETS[id] ? id : "openai";
 }
 
 function normalizeCustomProxyRoot(rawUrl) {
@@ -103,24 +78,35 @@ function normalizeCustomProxyRoot(rawUrl) {
   return url || AI_PROVIDER_PRESETS.custom.base_url;
 }
 
-function resolveCustomSurfaceBaseUrl(proxyRoot, apiSurface) {
-  const root = normalizeCustomProxyRoot(proxyRoot);
-  if (apiSurface === "gemini") return `${root}/v1beta`;
-  return `${root}/v1`;
+function resolveCustomOpenAiBaseUrl(proxyRoot) {
+  return `${normalizeCustomProxyRoot(proxyRoot)}/v1`;
 }
 
-function resolveCustomApiFormat(apiSurface) {
-  if (apiSurface === "anthropic") return "anthropic";
-  if (apiSurface === "gemini") return "gemini";
-  return "openai";
+function isLegacyOpenRouterUrl(url) {
+  return /openrouter\.ai/i.test(String(url || ""));
+}
+
+function sanitizeCustomProviderConfig(config = {}) {
+  const preset = AI_PROVIDER_PRESETS.custom;
+  let baseUrl = normalizeCustomProxyRoot(config.base_url || preset.base_url);
+  let chatModel = config.chat_model || preset.chat_model;
+
+  if (isLegacyOpenRouterUrl(baseUrl)) {
+    baseUrl = preset.base_url;
+    if (/^openai\//i.test(chatModel)) {
+      chatModel = preset.chat_model;
+    }
+  }
+
+  return { baseUrl, chatModel };
 }
 
 function resolveProviderBaseUrl(providerId, config = {}) {
   const preset = AI_PROVIDER_PRESETS[providerId];
   const raw = config.base_url || preset.base_url || null;
   if (providerId === "custom") {
-    const surface = normalizeCustomApiSurface(config.api_surface || preset.api_surface);
-    return resolveCustomSurfaceBaseUrl(raw, surface);
+    const { baseUrl } = sanitizeCustomProviderConfig(config);
+    return resolveCustomOpenAiBaseUrl(baseUrl);
   }
   return stripTrailingSlashes(raw);
 }
@@ -136,11 +122,9 @@ function buildDefaultProviders() {
     acc[id] = {
       enabled: id === "gpt",
       base_url: preset.base_url,
-      api_surface: preset.api_surface || "openai",
       chat_model: preset.chat_model,
       embedding_model: preset.embedding_model,
       api_key: null,
-      gemini_api_key: null,
     };
     return acc;
   }, {});
@@ -157,30 +141,30 @@ function migrateLegacyAiSettings(ai = {}) {
       ...providers.custom,
       enabled: true,
       api_key: ai.openrouter_api_key,
-      base_url: ai.base_url || providers.custom.base_url,
-      chat_model: ai.chat_model || providers.custom.chat_model,
+      base_url: AI_PROVIDER_PRESETS.custom.base_url,
+      chat_model: AI_PROVIDER_PRESETS.custom.chat_model,
     };
   }
 
   for (const id of AI_PROVIDER_IDS) {
     const preset = AI_PROVIDER_PRESETS[id];
-    const surface = normalizeCustomApiSurface(providers[id]?.api_surface || preset.api_surface);
+    const incoming = providers[id] || {};
+    const sanitizedCustom =
+      id === "custom" ? sanitizeCustomProviderConfig(incoming) : null;
+
     providers[id] = {
-      enabled: Boolean(providers[id]?.enabled),
+      enabled: Boolean(incoming.enabled),
       base_url:
-        id === "custom"
-          ? normalizeCustomProxyRoot(providers[id]?.base_url || preset.base_url)
-          : providers[id]?.base_url || preset.base_url,
-      api_surface: id === "custom" ? surface : preset.api_surface || "openai",
-      chat_model: providers[id]?.chat_model || preset.chat_model,
+        id === "custom" ? sanitizedCustom.baseUrl : incoming.base_url || preset.base_url,
+      chat_model:
+        id === "custom" ? sanitizedCustom.chatModel : incoming.chat_model || preset.chat_model,
       embedding_model:
         id === "custom"
           ? null
-          : providers[id]?.embedding_model !== undefined
-            ? providers[id].embedding_model
+          : incoming.embedding_model !== undefined
+            ? incoming.embedding_model
             : preset.embedding_model,
-      api_key: providers[id]?.api_key || null,
-      gemini_api_key: id === "custom" ? providers[id]?.gemini_api_key || null : null,
+      api_key: incoming.api_key || null,
     };
   }
 
@@ -193,13 +177,11 @@ function migrateLegacyAiSettings(ai = {}) {
 module.exports = {
   AI_PROVIDER_IDS,
   AI_PROVIDER_PRESETS,
-  CUSTOM_API_SURFACE_PRESETS,
   FIXED_GEMINI_EMBEDDING,
   normalizeProviderId,
-  normalizeCustomApiSurface,
   normalizeCustomProxyRoot,
-  resolveCustomSurfaceBaseUrl,
-  resolveCustomApiFormat,
+  resolveCustomOpenAiBaseUrl,
+  sanitizeCustomProviderConfig,
   buildDefaultProviders,
   migrateLegacyAiSettings,
   resolveProviderBaseUrl,

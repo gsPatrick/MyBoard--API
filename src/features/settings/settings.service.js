@@ -6,13 +6,11 @@ const policyEngine = require("../bordie/policy-engine.service");
 const {
   AI_PROVIDER_IDS,
   AI_PROVIDER_PRESETS,
-  CUSTOM_API_SURFACE_PRESETS,
   normalizeProviderId,
   migrateLegacyAiSettings,
-  normalizeCustomApiSurface,
   normalizeCustomProxyRoot,
-  resolveCustomApiFormat,
-  resolveCustomSurfaceBaseUrl,
+  resolveCustomOpenAiBaseUrl,
+  sanitizeCustomProviderConfig,
   resolveProviderBaseUrl,
   FIXED_GEMINI_EMBEDDING,
 } = require("./ai-providers.config");
@@ -32,26 +30,18 @@ function maskSecret(value) {
 function sanitizeProviderConfig(providerId, config = {}) {
   const preset = AI_PROVIDER_PRESETS[providerId];
   const hasKey = Boolean(config.api_key);
-  const hasGeminiKey = Boolean(config.gemini_api_key);
-  const apiSurface =
-    providerId === "custom" ? normalizeCustomApiSurface(config.api_surface || preset.api_surface) : null;
-  const baseUrl =
-    providerId === "custom"
-      ? normalizeCustomProxyRoot(config.base_url || preset.base_url)
-      : config.base_url || preset.base_url;
+  const custom =
+    providerId === "custom" ? sanitizeCustomProviderConfig(config) : null;
 
-  const result = {
+  return {
     id: providerId,
     label: preset.label,
     enabled: Boolean(config.enabled),
-    api_format:
-      providerId === "custom" ? resolveCustomApiFormat(apiSurface) : preset.api_format,
-    base_url: baseUrl,
-    chat_model: config.chat_model || preset.chat_model,
+    api_format: preset.api_format,
+    base_url: providerId === "custom" ? custom.baseUrl : config.base_url || preset.base_url,
+    chat_model: providerId === "custom" ? custom.chatModel : config.chat_model || preset.chat_model,
     embedding_model:
-      providerId === "custom"
-        ? FIXED_GEMINI_EMBEDDING.embedding_model
-        : config.embedding_model ?? preset.embedding_model,
+      providerId === "custom" ? null : config.embedding_model ?? preset.embedding_model,
     has_api_key: hasKey,
     api_key_masked: hasKey ? maskSecret(config.api_key) : null,
     configured: hasKey,
@@ -59,15 +49,6 @@ function sanitizeProviderConfig(providerId, config = {}) {
     key_hint: preset.key_hint,
     docs_url: preset.docs_url,
   };
-
-  if (providerId === "custom") {
-    result.api_surface = apiSurface;
-    result.api_surface_label = CUSTOM_API_SURFACE_PRESETS[apiSurface]?.label || apiSurface;
-    result.has_gemini_api_key = hasGeminiKey;
-    result.gemini_api_key_masked = hasGeminiKey ? maskSecret(config.gemini_api_key) : null;
-  }
-
-  return result;
 }
 
 function sanitizeAiSettings(ai = {}) {
@@ -90,7 +71,7 @@ function sanitizeAiSettings(ai = {}) {
     chat_model: activeConfig.chat_model || AI_PROVIDER_PRESETS[activeProvider].chat_model,
     embedding_model:
       activeProvider === "custom"
-        ? FIXED_GEMINI_EMBEDDING.embedding_model
+        ? null
         : activeConfig.embedding_model ?? AI_PROVIDER_PRESETS[activeProvider].embedding_model,
     has_api_key: hasActiveKey,
     api_key_masked: hasActiveKey ? maskSecret(activeConfig.api_key) : null,
@@ -174,20 +155,10 @@ async function updateAiSettings(payload, ctx) {
         String(payload.base_url || "").trim() || preset.base_url
       );
     }
-    if (payload.api_surface !== undefined) {
-      providerConfig.api_surface = normalizeCustomApiSurface(payload.api_surface);
-    }
     if (payload.chat_model !== undefined) {
       providerConfig.chat_model = String(payload.chat_model || "").trim() || preset.chat_model;
     }
     providerConfig.embedding_model = null;
-    if (payload.gemini_api_key !== undefined) {
-      const key = String(payload.gemini_api_key || "").trim();
-      if (key && !key.includes("••••")) providerConfig.gemini_api_key = key;
-    }
-    if (payload.clear_gemini_api_key === true) {
-      delete providerConfig.gemini_api_key;
-    }
   } else {
     providerConfig.base_url = preset.base_url;
     providerConfig.chat_model = preset.chat_model;
@@ -293,11 +264,10 @@ async function testAiConnection(ctx) {
       ok: true,
       message:
         credentials.provider === "custom"
-          ? `Conexão CLIProxyAPI (${credentials.apiSurfaceLabel || credentials.apiSurface}) OK.`
+          ? "Conexão CLIProxyAPI OK."
           : `Conexão com ${AI_PROVIDER_PRESETS[credentials.provider]?.label || credentials.provider} OK.`,
       sample: String(response.content || "").slice(0, 80),
       provider: credentials.provider,
-      api_surface: credentials.apiSurface || null,
     };
   } catch (error) {
     return {
@@ -322,28 +292,21 @@ async function resolveAiCredentials(tenantId) {
   const preset = AI_PROVIDER_PRESETS[provider];
 
   if (provider === "custom") {
-    const apiSurface = normalizeCustomApiSurface(config.api_surface || preset.api_surface);
-    const proxyRoot = normalizeCustomProxyRoot(config.base_url || preset.base_url);
+    const { baseUrl, chatModel } = sanitizeCustomProviderConfig(config);
 
     return {
       provider: "custom",
-      apiSurface,
-      apiSurfaceLabel: CUSTOM_API_SURFACE_PRESETS[apiSurface]?.label || apiSurface,
-      apiFormat: resolveCustomApiFormat(apiSurface),
+      apiFormat: "openai",
       apiKey: config.api_key || null,
-      proxyRoot,
-      baseUrl: resolveCustomSurfaceBaseUrl(proxyRoot, apiSurface),
-      chatModel:
-        config.chat_model ||
-        CUSTOM_API_SURFACE_PRESETS[apiSurface]?.chat_model ||
-        preset.chat_model,
+      proxyRoot: baseUrl,
+      baseUrl: resolveCustomOpenAiBaseUrl(baseUrl),
+      chatModel,
       embeddingModel: null,
     };
   }
 
   return {
     provider,
-    apiSurface: null,
     apiFormat: preset.api_format,
     apiKey: config.api_key || null,
     baseUrl: resolveProviderBaseUrl(provider, config),
@@ -360,12 +323,7 @@ async function resolveEmbeddingCredentials(tenantId) {
   const preset = AI_PROVIDER_PRESETS[provider];
 
   if (provider === "custom") {
-    const customConfig = migrated.providers.custom || {};
-    const apiKey =
-      customConfig.gemini_api_key ||
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
-      null;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || null;
 
     return {
       provider: FIXED_GEMINI_EMBEDDING.provider,

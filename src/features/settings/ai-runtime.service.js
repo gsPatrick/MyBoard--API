@@ -54,7 +54,6 @@ async function createChatCompletion(tenantId, options = {}) {
   const ai = await getCredentials(tenantId);
 
   if (!isConfigured(ai)) {
-    const lastUser = [...(options.messages || [])].reverse().find((item) => item.role === "user");
     return {
       content: `IA não configurada. Adicione a chave em Configurações → IA.`,
       raw: null,
@@ -64,10 +63,9 @@ async function createChatCompletion(tenantId, options = {}) {
 
   if (ai.provider === "custom") {
     return cliproxyClient.createChatCompletion({
-      apiSurface: ai.apiSurface,
+      apiKey: ai.apiKey,
       proxyRoot: ai.proxyRoot,
       baseUrl: ai.baseUrl,
-      apiKey: ai.apiKey,
       model: options.model || ai.chatModel,
       messages: options.messages,
       temperature: options.temperature,
