@@ -1,4 +1,4 @@
-const { isGroupJid, jidToPhoneDigits } = require("../rag/phone-normalizer");
+const { isGroupJid, jidToPhoneDigits } = require("../../rag/phone-normalizer");
 
 function extractMessageText(message = {}) {
   if (message.conversation) return message.conversation;
