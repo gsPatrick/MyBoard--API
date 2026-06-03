@@ -76,6 +76,33 @@ async function createOpenAiSurfaceChat({
   };
 }
 
+async function listModels({ proxyRoot, baseUrl, apiKey }) {
+  const root = normalizeProxyRoot(proxyRoot || baseUrl);
+  const openAiBase = baseUrl || resolveSurfaceBaseUrl(root, "openai");
+
+  const response = await fetch(`${stripTrailingSlashes(openAiBase)}/models`, {
+    method: "GET",
+    headers: buildProxyAuthHeaders(apiKey),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Proxy falhou (${response.status}): ${errorText.slice(0, 240)}`);
+  }
+
+  const payload = await response.json();
+  const rows = Array.isArray(payload?.data) ? payload.data : [];
+
+  return rows
+    .map((item) => ({
+      id: String(item.id || "").trim(),
+      owned_by: item.owned_by || null,
+      object: item.object || "model",
+    }))
+    .filter((item) => item.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
 async function createChatCompletion({
   proxyRoot,
   baseUrl,
@@ -105,4 +132,5 @@ module.exports = {
   resolveSurfaceBaseUrl,
   createOpenAiSurfaceChat,
   createChatCompletion,
+  listModels,
 };

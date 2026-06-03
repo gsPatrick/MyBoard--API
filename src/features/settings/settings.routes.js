@@ -10,6 +10,7 @@ router.use(...requireAuth);
 router.get("/", settingsController.getSettings);
 router.patch("/ai", authorize("admin", "developer"), settingsController.updateAi);
 router.post("/ai/test", authorize("admin", "developer"), settingsController.testAi);
+router.post("/ai/models", authorize("admin", "developer"), settingsController.listAiModels);
 router.patch("/privacy", authorize("admin", "developer"), settingsController.updatePrivacy);
 
 module.exports = router;

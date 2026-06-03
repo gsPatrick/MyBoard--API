@@ -1,3 +1,5 @@
+const DEFAULT_CLIPROXY_URL = "https://geral-cli-antigravity-patrick.r954jc.easypanel.host";
+
 const AI_PROVIDER_IDS = ["gpt", "claude", "gemini", "custom"];
 
 const AI_PROVIDER_PRESETS = {
@@ -38,10 +40,10 @@ const AI_PROVIDER_PRESETS = {
     id: "custom",
     label: "Proxy / CLI",
     api_format: "openai",
-    base_url: "http://localhost:8317",
-    chat_model: "gemini-2.5-pro",
+    base_url: DEFAULT_CLIPROXY_URL,
+    chat_model: "gemini-2.5-flash",
     embedding_model: null,
-    key_hint: "your-api-key-1",
+    key_hint: "batata",
     docs_url: null,
     description:
       "CLIProxyAPI: URL da API, Bearer token (api-keys) e model id de GET /v1/models.",
@@ -178,6 +180,7 @@ module.exports = {
   AI_PROVIDER_IDS,
   AI_PROVIDER_PRESETS,
   FIXED_GEMINI_EMBEDDING,
+  DEFAULT_CLIPROXY_URL,
   normalizeProviderId,
   normalizeCustomProxyRoot,
   resolveCustomOpenAiBaseUrl,

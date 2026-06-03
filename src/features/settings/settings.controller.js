@@ -27,9 +27,16 @@ const testAi = catchAsync(async (req, res) => {
   return sendSuccess(res, data);
 });
 
+const listAiModels = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const data = await settingsService.listCustomProxyModels(req.body || {}, ctx);
+  return sendSuccess(res, data);
+});
+
 module.exports = {
   getSettings,
   updateAi,
   updatePrivacy,
   testAi,
+  listAiModels,
 };

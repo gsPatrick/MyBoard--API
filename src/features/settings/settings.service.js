@@ -2,6 +2,7 @@ const { Tenant, WhatsappInstance } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { resolveTenantIdForWrite } = require("../../utils/request-context");
 const aiRuntime = require("./ai-runtime.service");
+const cliproxyClient = require("../../providers/cliproxy/cliproxy.client");
 const policyEngine = require("../bordie/policy-engine.service");
 const {
   AI_PROVIDER_IDS,
@@ -345,11 +346,45 @@ async function resolveEmbeddingCredentials(tenantId) {
   };
 }
 
+async function listCustomProxyModels(payload = {}, ctx) {
+  const tenant = await getTenantForContext(ctx);
+  const migrated = migrateLegacyAiSettings(tenant.settings?.ai || {});
+  const stored = migrated.providers.custom || {};
+  const preset = AI_PROVIDER_PRESETS.custom;
+
+  const { baseUrl } = sanitizeCustomProviderConfig({
+    base_url: payload.base_url || stored.base_url || preset.base_url,
+  });
+
+  const incomingKey = String(payload.api_key || "").trim();
+  const apiKey =
+    incomingKey && !incomingKey.includes("••••") ? incomingKey : stored.api_key || null;
+
+  if (!apiKey) {
+    throw new AppError("Informe o Bearer token do proxy.", 400, "VALIDATION_ERROR");
+  }
+
+  try {
+    const models = await cliproxyClient.listModels({
+      proxyRoot: baseUrl,
+      apiKey,
+    });
+
+    return {
+      models,
+      base_url: baseUrl,
+    };
+  } catch (error) {
+    throw new AppError(error.message || "Falha ao listar modelos do proxy.", 502, "PROXY_MODELS_ERROR");
+  }
+}
+
 module.exports = {
   getWorkspaceSettings,
   updateAiSettings,
   updatePrivacySettings,
   testAiConnection,
+  listCustomProxyModels,
   resolveTenantAiConfig,
   resolveAiCredentials,
   resolveEmbeddingCredentials,
