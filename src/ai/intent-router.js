@@ -10,7 +10,11 @@ function detectIntent({ message = "", mode = "chat", context = {} }) {
     };
   }
 
-  if (activeTab === "board" || /board|quadro|canvas|desenhar|fluxo|diagrama|wireframe|mapa mental/.test(text)) {
+  if (
+    /board|quadro|canvas|desenhar|desenha|fluxo|diagrama|wireframe|mapa mental|cria|adicione|nota|sticky|limpar board|apagar/.test(
+      text
+    )
+  ) {
     return {
       intent: "board",
       promptParts: ["core/identity", "core/safety", "modes/board_agent"],

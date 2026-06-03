@@ -293,43 +293,57 @@ async function rewriteQuery(query, scope = {}, tenantId = null) {
 }
 
 async function searchKnowledge({ tenantId, query, scope = {}, limit = 12 }) {
-  const rewritten = await rewriteQuery(query, scope, tenantId);
-  const queries = await expandQuery(rewritten, scope, tenantId);
+  try {
+    const rewritten = await rewriteQuery(query, scope, tenantId);
+    const queries = await expandQuery(rewritten, scope, tenantId);
 
-  const searchJobs = queries.flatMap((q) => [
-    fullTextSearch(tenantId, q, scope, limit),
-    vectorSearch(tenantId, q, scope, limit),
-    fuzzySearch(tenantId, q, scope, Math.ceil(limit / 2)),
-  ]);
+    const searchJobs = queries.flatMap((q) => [
+      fullTextSearch(tenantId, q, scope, limit),
+      vectorSearch(tenantId, q, scope, limit),
+      fuzzySearch(tenantId, q, scope, Math.ceil(limit / 2)),
+    ]);
 
-  const [keywordBatches, factHits, mediaHits, summaries] = await Promise.all([
-    Promise.all(searchJobs).then((batches) => batches.flat()),
-    factsRetrieval.searchFacts({ tenantId, query: rewritten, scope, limit: 10 }),
-    factsRetrieval.searchMediaAssets({ tenantId, query: rewritten, scope, limit: 6 }),
-    fetchSummaries(tenantId, scope, 4),
-  ]);
+    const [keywordBatches, factHits, mediaHits, summaries] = await Promise.all([
+      Promise.all(searchJobs).then((batches) => batches.flat()),
+      factsRetrieval.searchFacts({ tenantId, query: rewritten, scope, limit: 10 }),
+      factsRetrieval.searchMediaAssets({ tenantId, query: rewritten, scope, limit: 6 }),
+      fetchSummaries(tenantId, scope, 4),
+    ]);
 
-  const chunks = mergeResults(
-    [...keywordBatches, ...factsAsChunks(factHits), ...mediaAsChunks(mediaHits)],
-    limit
-  );
+    const chunks = mergeResults(
+      [...keywordBatches, ...factsAsChunks(factHits), ...mediaAsChunks(mediaHits)],
+      limit
+    );
 
-  return {
-    query,
-    rewritten_query: rewritten,
-    expanded_queries: queries,
-    chunks,
-    facts: factHits,
-    media: mediaHits,
-    summaries,
-    stats: {
-      keyword_hits: keywordBatches.filter((i) => i.source === "keyword").length,
-      vector_hits: keywordBatches.filter((i) => i.source === "vector").length,
-      fact_hits: factHits.length,
-      media_hits: mediaHits.length,
-      summaries: summaries.length,
-    },
-  };
+    return {
+      query,
+      rewritten_query: rewritten,
+      expanded_queries: queries,
+      chunks,
+      facts: factHits,
+      media: mediaHits,
+      summaries,
+      stats: {
+        keyword_hits: keywordBatches.filter((i) => i.source === "keyword").length,
+        vector_hits: keywordBatches.filter((i) => i.source === "vector").length,
+        fact_hits: factHits.length,
+        media_hits: mediaHits.length,
+        summaries: summaries.length,
+      },
+    };
+  } catch (error) {
+    console.warn("[rag] searchKnowledge indisponível:", error.message);
+    return {
+      query,
+      rewritten_query: query,
+      expanded_queries: [query],
+      chunks: [],
+      facts: [],
+      media: [],
+      summaries: [],
+      stats: {},
+    };
+  }
 }
 
 function buildContextPack(searchResult, maxChars = 14000) {

@@ -24,27 +24,60 @@ function normalizeContext(context = {}) {
   };
 }
 
+function formatScreenContext(context = {}) {
+  const lines = [
+    `Aba ativa: ${context.activeTabLabel || context.activeTab || context.active_tab || "desconhecida"}`,
+  ];
+
+  if (context.client?.name) {
+    lines.push(`Cliente selecionado: ${context.client.name} (id: ${context.client.id})`);
+  }
+
+  if (context.project?.name) {
+    lines.push(`Projeto selecionado: ${context.project.name} (id: ${context.project.id})`);
+  }
+
+  if (context.board?.name || context.board?.id) {
+    lines.push(
+      `Board aberto: ${context.board.name || context.board.id}${
+        context.board.summary ? ` — ${JSON.stringify(context.board.summary)}` : ""
+      }`
+    );
+  }
+
+  if (context.policy_mode) {
+    lines.push(`Política de ações: ${context.policy_mode}`);
+  }
+
+  return lines.join("\n");
+}
+
 async function buildRagContext(query, context, tenantId) {
   if (!query?.trim()) {
     return { contextPack: "", rag: null, intel: null };
   }
 
-  const scope = buildScopeFromContext(context);
-  const [rag, intel] = await Promise.all([
-    retrievalService.searchKnowledge({
-      tenantId,
-      query,
-      scope,
-      limit: 14,
-    }),
-    bordieTools.gatherStructuredIntel({ tenantId, query, context }),
-  ]);
+  try {
+    const scope = buildScopeFromContext(context);
+    const [rag, intel] = await Promise.all([
+      retrievalService.searchKnowledge({
+        tenantId,
+        query,
+        scope,
+        limit: 14,
+      }),
+      bordieTools.gatherStructuredIntel({ tenantId, query, context }),
+    ]);
 
-  const intelPack = bordieTools.formatIntelContext(intel);
-  const ragPack = retrievalService.buildContextPack(rag);
-  const contextPack = [intelPack, ragPack].filter(Boolean).join("\n\n");
+    const intelPack = bordieTools.formatIntelContext(intel);
+    const ragPack = retrievalService.buildContextPack(rag);
+    const contextPack = [intelPack, ragPack].filter(Boolean).join("\n\n");
 
-  return { contextPack, rag, intel };
+    return { contextPack, rag, intel };
+  } catch (error) {
+    console.warn("[bordie] RAG indisponível:", error.message);
+    return { contextPack: "", rag: null, intel: null };
+  }
 }
 
 async function resolveActionCandidates({ message, context, intel, boardResult, tenantId }) {
@@ -100,13 +133,22 @@ async function runBoardFlow({ message, context, history, tenantId, ctx }) {
     };
   }
 
-  return boardTools.runBoardAgent({
-    message,
-    boardId,
-    sceneData,
-    history,
-    ctx: { ...ctx, execute: false },
-  });
+  try {
+    return await boardTools.runBoardAgent({
+      message,
+      boardId,
+      sceneData,
+      history,
+      ctx: { ...ctx, execute: false },
+    });
+  } catch (error) {
+    console.warn("[bordie] board agent falhou:", error.message);
+    return {
+      reply: null,
+      action: null,
+      boardResult: null,
+    };
+  }
 }
 
 async function runChat({
@@ -124,7 +166,7 @@ async function runChat({
   const { contextPack, rag, intel } = await buildRagContext(message, normalizedContext, tenantId);
 
   let boardResult = null;
-  if (intent.intent === "board" || normalizedContext.activeTab === "board") {
+  if (intent.intent === "board") {
     boardResult = await runBoardFlow({
       message,
       context: normalizedContext,
@@ -138,7 +180,7 @@ async function runChat({
     { role: "system", content: systemPrompt },
     {
       role: "system",
-      content: `Contexto estruturado:\n${JSON.stringify(normalizedContext, null, 2)}`,
+      content: `Contexto da tela do usuário:\n${formatScreenContext(normalizedContext)}`,
     },
   ];
 
@@ -168,12 +210,17 @@ async function runChat({
 
   let reply = boardResult?.reply || "";
   if (!reply) {
-    const completion = await aiRuntime.createChatCompletion(tenantId, {
-      messages,
-      temperature: mode === "command" ? 0.2 : 0.35,
-      max_tokens: 1400,
-    });
-    reply = completion.content;
+    try {
+      const completion = await aiRuntime.createChatCompletion(tenantId, {
+        messages,
+        temperature: mode === "command" ? 0.2 : 0.35,
+        max_tokens: 1400,
+      });
+      reply = completion.content;
+    } catch (error) {
+      console.warn("[bordie] chat completion falhou:", error.message);
+      reply = `Não consegui chamar a IA: ${error.message}. Verifique Configurações → IA.`;
+    }
   }
 
   const candidates = await resolveActionCandidates({
