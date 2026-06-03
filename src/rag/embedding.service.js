@@ -10,16 +10,21 @@ function buildEmbeddingFields(vector) {
   if (!literal) return { embedding: null, embedding_vector: null };
 
   const { Sequelize } = require("sequelize");
-  return {
+  const fields = {
     embedding: vector,
-    embedding_vector: Sequelize.literal(`'${literal}'::vector`),
+    embedding_vector: null,
   };
+
+  if (vector.length === aiRuntime.EMBEDDING_DIMENSIONS) {
+    fields.embedding_vector = Sequelize.literal(`'${literal}'::vector`);
+  }
+
+  return fields;
 }
 
 async function isConfigured(tenantId) {
   if (!tenantId) return false;
-  const credentials = await aiRuntime.getCredentials(tenantId);
-  return aiRuntime.supportsEmbeddings(credentials);
+  return aiRuntime.supportsEmbeddingsForTenant(tenantId);
 }
 
 async function createEmbedding(input, tenantId) {

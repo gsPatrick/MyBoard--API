@@ -1,6 +1,6 @@
 const settingsService = require("./settings.service");
 const llmClient = require("../../providers/openrouter/openrouter.client");
-const { normalizeCustomOpenAiBaseUrl } = require("./ai-providers.config");
+const cliproxyClient = require("../../providers/cliproxy/cliproxy.client");
 
 const EMBEDDING_DIMENSIONS = Number(process.env.OPENROUTER_EMBEDDING_DIMENSIONS || 1536);
 
@@ -18,16 +18,18 @@ function buildOpenAiSurfaceHeaders(apiKey, baseUrl) {
   return headers;
 }
 
-function resolveOpenAiSurfaceBaseUrl(credentials) {
-  if (credentials.provider === "custom") {
-    return normalizeCustomOpenAiBaseUrl(credentials.baseUrl);
-  }
+function resolveEmbeddingBaseUrl(credentials) {
   return String(credentials.baseUrl || "").replace(/\/$/, "");
 }
 
 async function getCredentials(tenantId) {
   if (!tenantId) return null;
   return settingsService.resolveAiCredentials(tenantId);
+}
+
+async function getEmbeddingCredentials(tenantId) {
+  if (!tenantId) return null;
+  return settingsService.resolveEmbeddingCredentials(tenantId);
 }
 
 function isConfigured(credentials) {
@@ -43,6 +45,11 @@ function supportsEmbeddings(credentials) {
   return isConfigured(credentials) && Boolean(credentials.embeddingModel);
 }
 
+async function supportsEmbeddingsForTenant(tenantId) {
+  const credentials = await getEmbeddingCredentials(tenantId);
+  return supportsEmbeddings(credentials);
+}
+
 async function createChatCompletion(tenantId, options = {}) {
   const ai = await getCredentials(tenantId);
 
@@ -55,12 +62,24 @@ async function createChatCompletion(tenantId, options = {}) {
     };
   }
 
-  const baseUrl = resolveOpenAiSurfaceBaseUrl(ai);
+  if (ai.provider === "custom") {
+    return cliproxyClient.createChatCompletion({
+      apiSurface: ai.apiSurface,
+      proxyRoot: ai.proxyRoot,
+      baseUrl: ai.baseUrl,
+      apiKey: ai.apiKey,
+      model: options.model || ai.chatModel,
+      messages: options.messages,
+      temperature: options.temperature,
+      max_tokens: options.max_tokens,
+      tools: options.tools,
+    });
+  }
 
   return llmClient.createChatCompletion({
     ...options,
     apiKey: ai.apiKey,
-    baseUrl,
+    baseUrl: ai.baseUrl,
     model: options.model || ai.chatModel,
     apiFormat: ai.apiFormat,
     provider: ai.provider,
@@ -71,10 +90,10 @@ async function createEmbedding(tenantId, input) {
   const text = String(input || "").trim();
   if (!text || !tenantId) return null;
 
-  const ai = await getCredentials(tenantId);
+  const ai = await getEmbeddingCredentials(tenantId);
   if (!supportsEmbeddings(ai)) return null;
 
-  const baseUrl = resolveOpenAiSurfaceBaseUrl(ai);
+  const baseUrl = resolveEmbeddingBaseUrl(ai);
   const headers = buildOpenAiSurfaceHeaders(ai.apiKey, baseUrl);
 
   const response = await fetch(`${baseUrl}/embeddings`, {
@@ -106,11 +125,12 @@ async function createEmbedding(tenantId, input) {
 module.exports = {
   EMBEDDING_DIMENSIONS,
   getCredentials,
+  getEmbeddingCredentials,
   isConfigured,
   isConfiguredForTenant,
   supportsEmbeddings,
+  supportsEmbeddingsForTenant,
   createChatCompletion,
   createEmbedding,
-  resolveOpenAiSurfaceBaseUrl,
   buildOpenAiSurfaceHeaders,
 };

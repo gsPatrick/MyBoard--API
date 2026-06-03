@@ -1,5 +1,23 @@
 const AI_PROVIDER_IDS = ["gpt", "claude", "gemini", "custom"];
 
+const CUSTOM_API_SURFACE_PRESETS = {
+  openai: {
+    id: "openai",
+    label: "OpenAI (GPT)",
+    chat_model: "gpt-4o-mini",
+  },
+  anthropic: {
+    id: "anthropic",
+    label: "Claude",
+    chat_model: "claude-sonnet-4-5-20250929",
+  },
+  gemini: {
+    id: "gemini",
+    label: "Gemini",
+    chat_model: "gemini-2.5-pro",
+  },
+};
+
 const AI_PROVIDER_PRESETS = {
   gpt: {
     id: "gpt",
@@ -38,46 +56,71 @@ const AI_PROVIDER_PRESETS = {
     id: "custom",
     label: "Proxy / CLI",
     api_format: "openai",
+    api_surface: "openai",
     base_url: "http://localhost:8317",
-    chat_model: "gemini-2.5-pro",
-    embedding_model: "text-embedding-3-small",
+    chat_model: CUSTOM_API_SURFACE_PRESETS.openai.chat_model,
+    embedding_model: null,
     key_hint: "your-api-key-1",
     docs_url: null,
     description:
-      "CLIProxyAPI ou gateway compatível OpenAI (/v1). Informe host:porta, Bearer token e model id listado em GET /v1/models.",
+      "CLIProxyAPI: escolha a superfície (GPT / Claude / Gemini), endpoint, token e model id do proxy.",
   },
+};
+
+/** Embeddings RAG no modo custom — Gemini direto (gratuito), fora do proxy */
+const FIXED_GEMINI_EMBEDDING = {
+  provider: "gemini",
+  api_format: "openai",
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  embedding_model: "text-embedding-004",
 };
 
 function stripTrailingSlashes(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
 
-/**
- * Normaliza a URL do modo custom para a superfície OpenAI do CLIProxyAPI:
- * http://host:8317  →  http://host:8317/v1
- * Requisições: POST {base}/chat/completions e POST {base}/embeddings com Authorization: Bearer
- */
-function normalizeCustomOpenAiBaseUrl(rawUrl) {
+function normalizeCustomApiSurface(value) {
+  const id = String(value || "openai").toLowerCase();
+  return CUSTOM_API_SURFACE_PRESETS[id] ? id : "openai";
+}
+
+function normalizeCustomProxyRoot(rawUrl) {
   let url = stripTrailingSlashes(rawUrl);
-  if (!url) return "http://localhost:8317/v1";
+  if (!url) return AI_PROVIDER_PRESETS.custom.base_url;
 
-  url = url.replace(/\/chat\/completions$/i, "");
-  url = url.replace(/\/embeddings$/i, "");
-  url = url.replace(/\/messages$/i, "");
-  url = stripTrailingSlashes(url);
-
-  if (!/\/v1$/i.test(url)) {
-    url = `${url}/v1`;
+  for (let i = 0; i < 5; i += 1) {
+    const next = stripTrailingSlashes(url)
+      .replace(/\/v1beta$/i, "")
+      .replace(/\/v1$/i, "")
+      .replace(/\/chat\/completions$/i, "")
+      .replace(/\/embeddings$/i, "")
+      .replace(/\/messages$/i, "")
+      .replace(/\/models\/[^/]+:generateContent$/i, "");
+    if (next === url) break;
+    url = next;
   }
 
-  return url;
+  return url || AI_PROVIDER_PRESETS.custom.base_url;
+}
+
+function resolveCustomSurfaceBaseUrl(proxyRoot, apiSurface) {
+  const root = normalizeCustomProxyRoot(proxyRoot);
+  if (apiSurface === "gemini") return `${root}/v1beta`;
+  return `${root}/v1`;
+}
+
+function resolveCustomApiFormat(apiSurface) {
+  if (apiSurface === "anthropic") return "anthropic";
+  if (apiSurface === "gemini") return "gemini";
+  return "openai";
 }
 
 function resolveProviderBaseUrl(providerId, config = {}) {
   const preset = AI_PROVIDER_PRESETS[providerId];
   const raw = config.base_url || preset.base_url || null;
   if (providerId === "custom") {
-    return normalizeCustomOpenAiBaseUrl(raw);
+    const surface = normalizeCustomApiSurface(config.api_surface || preset.api_surface);
+    return resolveCustomSurfaceBaseUrl(raw, surface);
   }
   return stripTrailingSlashes(raw);
 }
@@ -93,9 +136,11 @@ function buildDefaultProviders() {
     acc[id] = {
       enabled: id === "gpt",
       base_url: preset.base_url,
+      api_surface: preset.api_surface || "openai",
       chat_model: preset.chat_model,
       embedding_model: preset.embedding_model,
       api_key: null,
+      gemini_api_key: null,
     };
     return acc;
   }, {});
@@ -114,21 +159,28 @@ function migrateLegacyAiSettings(ai = {}) {
       api_key: ai.openrouter_api_key,
       base_url: ai.base_url || providers.custom.base_url,
       chat_model: ai.chat_model || providers.custom.chat_model,
-      embedding_model: ai.embedding_model || providers.custom.embedding_model,
     };
   }
 
   for (const id of AI_PROVIDER_IDS) {
     const preset = AI_PROVIDER_PRESETS[id];
+    const surface = normalizeCustomApiSurface(providers[id]?.api_surface || preset.api_surface);
     providers[id] = {
       enabled: Boolean(providers[id]?.enabled),
-      base_url: providers[id]?.base_url || preset.base_url,
+      base_url:
+        id === "custom"
+          ? normalizeCustomProxyRoot(providers[id]?.base_url || preset.base_url)
+          : providers[id]?.base_url || preset.base_url,
+      api_surface: id === "custom" ? surface : preset.api_surface || "openai",
       chat_model: providers[id]?.chat_model || preset.chat_model,
       embedding_model:
-        providers[id]?.embedding_model !== undefined
-          ? providers[id].embedding_model
-          : preset.embedding_model,
+        id === "custom"
+          ? null
+          : providers[id]?.embedding_model !== undefined
+            ? providers[id].embedding_model
+            : preset.embedding_model,
       api_key: providers[id]?.api_key || null,
+      gemini_api_key: id === "custom" ? providers[id]?.gemini_api_key || null : null,
     };
   }
 
@@ -141,10 +193,15 @@ function migrateLegacyAiSettings(ai = {}) {
 module.exports = {
   AI_PROVIDER_IDS,
   AI_PROVIDER_PRESETS,
+  CUSTOM_API_SURFACE_PRESETS,
+  FIXED_GEMINI_EMBEDDING,
   normalizeProviderId,
+  normalizeCustomApiSurface,
+  normalizeCustomProxyRoot,
+  resolveCustomSurfaceBaseUrl,
+  resolveCustomApiFormat,
   buildDefaultProviders,
   migrateLegacyAiSettings,
-  normalizeCustomOpenAiBaseUrl,
   resolveProviderBaseUrl,
   stripTrailingSlashes,
 };

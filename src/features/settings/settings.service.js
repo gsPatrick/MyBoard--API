@@ -6,10 +6,15 @@ const policyEngine = require("../bordie/policy-engine.service");
 const {
   AI_PROVIDER_IDS,
   AI_PROVIDER_PRESETS,
+  CUSTOM_API_SURFACE_PRESETS,
   normalizeProviderId,
   migrateLegacyAiSettings,
-  normalizeCustomOpenAiBaseUrl,
+  normalizeCustomApiSurface,
+  normalizeCustomProxyRoot,
+  resolveCustomApiFormat,
+  resolveCustomSurfaceBaseUrl,
   resolveProviderBaseUrl,
+  FIXED_GEMINI_EMBEDDING,
 } = require("./ai-providers.config");
 
 const DEFAULT_PRIVACY = {
@@ -27,19 +32,26 @@ function maskSecret(value) {
 function sanitizeProviderConfig(providerId, config = {}) {
   const preset = AI_PROVIDER_PRESETS[providerId];
   const hasKey = Boolean(config.api_key);
+  const hasGeminiKey = Boolean(config.gemini_api_key);
+  const apiSurface =
+    providerId === "custom" ? normalizeCustomApiSurface(config.api_surface || preset.api_surface) : null;
   const baseUrl =
     providerId === "custom"
-      ? normalizeCustomOpenAiBaseUrl(config.base_url || preset.base_url)
+      ? normalizeCustomProxyRoot(config.base_url || preset.base_url)
       : config.base_url || preset.base_url;
 
-  return {
+  const result = {
     id: providerId,
     label: preset.label,
     enabled: Boolean(config.enabled),
-    api_format: preset.api_format,
+    api_format:
+      providerId === "custom" ? resolveCustomApiFormat(apiSurface) : preset.api_format,
     base_url: baseUrl,
     chat_model: config.chat_model || preset.chat_model,
-    embedding_model: config.embedding_model ?? preset.embedding_model,
+    embedding_model:
+      providerId === "custom"
+        ? FIXED_GEMINI_EMBEDDING.embedding_model
+        : config.embedding_model ?? preset.embedding_model,
     has_api_key: hasKey,
     api_key_masked: hasKey ? maskSecret(config.api_key) : null,
     configured: hasKey,
@@ -47,6 +59,15 @@ function sanitizeProviderConfig(providerId, config = {}) {
     key_hint: preset.key_hint,
     docs_url: preset.docs_url,
   };
+
+  if (providerId === "custom") {
+    result.api_surface = apiSurface;
+    result.api_surface_label = CUSTOM_API_SURFACE_PRESETS[apiSurface]?.label || apiSurface;
+    result.has_gemini_api_key = hasGeminiKey;
+    result.gemini_api_key_masked = hasGeminiKey ? maskSecret(config.gemini_api_key) : null;
+  }
+
+  return result;
 }
 
 function sanitizeAiSettings(ai = {}) {
@@ -68,7 +89,9 @@ function sanitizeAiSettings(ai = {}) {
     base_url: activeConfig.base_url || AI_PROVIDER_PRESETS[activeProvider].base_url,
     chat_model: activeConfig.chat_model || AI_PROVIDER_PRESETS[activeProvider].chat_model,
     embedding_model:
-      activeConfig.embedding_model ?? AI_PROVIDER_PRESETS[activeProvider].embedding_model,
+      activeProvider === "custom"
+        ? FIXED_GEMINI_EMBEDDING.embedding_model
+        : activeConfig.embedding_model ?? AI_PROVIDER_PRESETS[activeProvider].embedding_model,
     has_api_key: hasActiveKey,
     api_key_masked: hasActiveKey ? maskSecret(activeConfig.api_key) : null,
     configured: hasActiveKey,
@@ -147,15 +170,23 @@ async function updateAiSettings(payload, ctx) {
 
   if (isCustom) {
     if (payload.base_url !== undefined) {
-      providerConfig.base_url = normalizeCustomOpenAiBaseUrl(
+      providerConfig.base_url = normalizeCustomProxyRoot(
         String(payload.base_url || "").trim() || preset.base_url
       );
+    }
+    if (payload.api_surface !== undefined) {
+      providerConfig.api_surface = normalizeCustomApiSurface(payload.api_surface);
     }
     if (payload.chat_model !== undefined) {
       providerConfig.chat_model = String(payload.chat_model || "").trim() || preset.chat_model;
     }
-    if (payload.embedding_model !== undefined) {
-      providerConfig.embedding_model = String(payload.embedding_model || "").trim() || null;
+    providerConfig.embedding_model = null;
+    if (payload.gemini_api_key !== undefined) {
+      const key = String(payload.gemini_api_key || "").trim();
+      if (key && !key.includes("••••")) providerConfig.gemini_api_key = key;
+    }
+    if (payload.clear_gemini_api_key === true) {
+      delete providerConfig.gemini_api_key;
     }
   } else {
     providerConfig.base_url = preset.base_url;
@@ -260,9 +291,13 @@ async function testAiConnection(ctx) {
 
     return {
       ok: true,
-      message: `Conexão com ${AI_PROVIDER_PRESETS[credentials.provider]?.label || credentials.provider} OK.`,
+      message:
+        credentials.provider === "custom"
+          ? `Conexão CLIProxyAPI (${credentials.apiSurfaceLabel || credentials.apiSurface}) OK.`
+          : `Conexão com ${AI_PROVIDER_PRESETS[credentials.provider]?.label || credentials.provider} OK.`,
       sample: String(response.content || "").slice(0, 80),
       provider: credentials.provider,
+      api_surface: credentials.apiSurface || null,
     };
   } catch (error) {
     return {
@@ -286,13 +321,69 @@ async function resolveAiCredentials(tenantId) {
   const config = migrated.providers[provider] || {};
   const preset = AI_PROVIDER_PRESETS[provider];
 
+  if (provider === "custom") {
+    const apiSurface = normalizeCustomApiSurface(config.api_surface || preset.api_surface);
+    const proxyRoot = normalizeCustomProxyRoot(config.base_url || preset.base_url);
+
+    return {
+      provider: "custom",
+      apiSurface,
+      apiSurfaceLabel: CUSTOM_API_SURFACE_PRESETS[apiSurface]?.label || apiSurface,
+      apiFormat: resolveCustomApiFormat(apiSurface),
+      apiKey: config.api_key || null,
+      proxyRoot,
+      baseUrl: resolveCustomSurfaceBaseUrl(proxyRoot, apiSurface),
+      chatModel:
+        config.chat_model ||
+        CUSTOM_API_SURFACE_PRESETS[apiSurface]?.chat_model ||
+        preset.chat_model,
+      embeddingModel: null,
+    };
+  }
+
   return {
     provider,
+    apiSurface: null,
     apiFormat: preset.api_format,
     apiKey: config.api_key || null,
     baseUrl: resolveProviderBaseUrl(provider, config),
     chatModel: config.chat_model || preset.chat_model || null,
     embeddingModel: config.embedding_model ?? preset.embedding_model ?? null,
+  };
+}
+
+async function resolveEmbeddingCredentials(tenantId) {
+  const ai = await resolveTenantAiConfig(tenantId);
+  const migrated = migrateLegacyAiSettings(ai);
+  const provider = normalizeProviderId(migrated.active_provider);
+  const config = migrated.providers[provider] || {};
+  const preset = AI_PROVIDER_PRESETS[provider];
+
+  if (provider === "custom") {
+    const customConfig = migrated.providers.custom || {};
+    const apiKey =
+      customConfig.gemini_api_key ||
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      null;
+
+    return {
+      provider: FIXED_GEMINI_EMBEDDING.provider,
+      apiFormat: FIXED_GEMINI_EMBEDDING.api_format,
+      apiKey,
+      baseUrl: FIXED_GEMINI_EMBEDDING.base_url,
+      embeddingModel: FIXED_GEMINI_EMBEDDING.embedding_model,
+      chatModel: null,
+    };
+  }
+
+  return {
+    provider,
+    apiFormat: preset.api_format,
+    apiKey: config.api_key || null,
+    baseUrl: resolveProviderBaseUrl(provider, config),
+    embeddingModel: config.embedding_model ?? preset.embedding_model ?? null,
+    chatModel: config.chat_model || preset.chat_model || null,
   };
 }
 
@@ -303,6 +394,7 @@ module.exports = {
   testAiConnection,
   resolveTenantAiConfig,
   resolveAiCredentials,
+  resolveEmbeddingCredentials,
   sanitizeAiSettings,
   maskSecret,
 };
