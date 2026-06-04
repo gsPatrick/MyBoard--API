@@ -4,6 +4,7 @@ const aiRuntime = require("../settings/ai-runtime.service");
 const retrievalService = require("../../rag/retrieval.service");
 const bordieTools = require("./bordie-tools.service");
 const boardTools = require("./board-tools.service");
+const boardsService = require("../boards/boards.service");
 const policyEngine = require("./policy-engine.service");
 const actionExecutor = require("./action-executor.service");
 
@@ -38,11 +39,22 @@ function formatScreenContext(context = {}) {
   }
 
   if (context.board?.name || context.board?.id) {
-    lines.push(
-      `Board aberto: ${context.board.name || context.board.id}${
-        context.board.summary ? ` — ${JSON.stringify(context.board.summary)}` : ""
-      }`
-    );
+    const summary = context.board.summary || {};
+    lines.push(`Board aberto: "${context.board.name || context.board.id}"`);
+    if (summary.element_count != null) {
+      lines.push(`Elementos visíveis no canvas: ${summary.element_count}`);
+    }
+    if (summary.labels?.length) {
+      lines.push(`Conteúdo detectado: ${summary.labels.join(", ")}`);
+    }
+    if (summary.type_counts && Object.keys(summary.type_counts).length) {
+      lines.push(`Tipos de elementos: ${JSON.stringify(summary.type_counts)}`);
+    }
+    if (summary.has_content === false || summary.element_count === 0) {
+      lines.push(
+        "O snapshot do canvas indica board vazio. Se o usuário vê elementos na tela, diga que pode haver alterações não sincronizadas e peça para salvar o board."
+      );
+    }
   }
 
   if (context.policy_mode) {
@@ -50,6 +62,59 @@ function formatScreenContext(context = {}) {
   }
 
   return lines.join("\n");
+}
+
+function countVisibleElements(sceneData = {}) {
+  return (Array.isArray(sceneData?.elements) ? sceneData.elements : []).filter((el) => !el.isDeleted)
+    .length;
+}
+
+async function resolveBoardSceneContext(context = {}, serviceCtx = null) {
+  const boardId = context.board?.id || context.board_id;
+  if (!boardId) {
+    return { boardId: null, sceneData: null, summary: null };
+  }
+
+  let sceneData = context.board?.scene_data;
+  let boardName = context.board?.name || "Board";
+
+  if (!countVisibleElements(sceneData) && serviceCtx) {
+    try {
+      const board = await boardsService.getBoardById(boardId, serviceCtx);
+      if (board) {
+        boardName = board.name || boardName;
+        if (countVisibleElements(board.scene_data)) {
+          sceneData = board.scene_data;
+        }
+      }
+    } catch (error) {
+      console.warn("[bordie] fallback load board:", error.message);
+    }
+  }
+
+  sceneData = sceneData || { elements: [], appState: {}, files: {} };
+  const summary = boardTools.summarizeScene(sceneData);
+
+  return { boardId, boardName, sceneData, summary };
+}
+
+async function enrichContextWithBoard(context = {}, serviceCtx = null) {
+  const normalized = normalizeContext(context);
+  const resolved = await resolveBoardSceneContext(normalized, serviceCtx);
+
+  if (!resolved.boardId) return normalized;
+
+  return {
+    ...normalized,
+    board_id: resolved.boardId,
+    board: {
+      ...(normalized.board || {}),
+      id: resolved.boardId,
+      name: resolved.boardName,
+      scene_data: resolved.sceneData,
+      summary: resolved.summary,
+    },
+  };
 }
 
 async function buildRagContext(query, context, tenantId) {
@@ -160,7 +225,8 @@ async function runChat({
   userId,
   userRole,
 }) {
-  const normalizedContext = normalizeContext(context);
+  const serviceCtx = { tenantId, userId };
+  const normalizedContext = await enrichContextWithBoard(context, serviceCtx);
   const intent = intentRouter.detectIntent({ message, mode, context: normalizedContext });
   const systemPrompt = promptLoader.composeSystemPrompt(intent.promptParts);
   const { contextPack, rag, intel } = await buildRagContext(message, normalizedContext, tenantId);
@@ -172,9 +238,12 @@ async function runChat({
       context: normalizedContext,
       history,
       tenantId,
-      ctx: { tenantId, userId },
+      ctx: serviceCtx,
     });
   }
+
+  const boardSnapshot = boardTools.summarizeScene(normalizedContext.board?.scene_data);
+  const hasBoard = Boolean(normalizedContext.board?.id);
 
   const messages = [
     { role: "system", content: systemPrompt },
@@ -183,6 +252,21 @@ async function runChat({
       content: `Contexto da tela do usuário:\n${formatScreenContext(normalizedContext)}`,
     },
   ];
+
+  if (hasBoard && boardSnapshot) {
+    messages.push({
+      role: "system",
+      content: `Snapshot atual do board (use isto — não invente elementos):\n${JSON.stringify(
+        {
+          board_id: normalizedContext.board.id,
+          board_name: normalizedContext.board.name,
+          ...boardSnapshot,
+        },
+        null,
+        2
+      )}`,
+    });
+  }
 
   if (contextPack) {
     messages.push({

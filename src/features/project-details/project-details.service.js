@@ -166,6 +166,22 @@ async function bulkCreateDetails(projectId, items = [], ctx) {
   return results;
 }
 
+// Cria ou atualiza um detalhe pela `key` (idempotente) — usado na ingestão por IA
+// para não duplicar credenciais/itens quando o mesmo arquivo é reenviado.
+async function upsertDetailByKey(projectId, payload, ctx) {
+  await ensureProjectExists(projectId, ctx);
+  validateDetailPayload(payload);
+
+  const key = normalizeKey(payload.key);
+  const existing = await ProjectDetail.findOne({ where: { project_id: projectId, key } });
+
+  if (!existing) {
+    return createDetail(projectId, payload, ctx);
+  }
+
+  return updateDetail(projectId, existing.id, { ...payload, key }, ctx);
+}
+
 async function updateDetail(projectId, detailId, payload, ctx) {
   await ensureProjectExists(projectId, ctx);
   const detail = await ProjectDetail.findOne({
@@ -246,6 +262,7 @@ module.exports = {
   getDetailById,
   createDetail,
   bulkCreateDetails,
+  upsertDetailByKey,
   updateDetail,
   deleteDetail,
   getDetailsGroupedByCategory,

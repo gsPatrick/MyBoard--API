@@ -34,6 +34,7 @@ async function createChatCompletion({
       model,
       temperature,
       max_tokens,
+      tools,
       apiKey: resolvedKey,
       baseUrl: resolvedBase,
       provider,
@@ -82,11 +83,45 @@ async function createChatCompletion({
   };
 }
 
+// Converte tools no formato OpenAI ([{ type:"function", function:{ name, description, parameters }}])
+// para o formato Anthropic ([{ name, description, input_schema }]).
+function toAnthropicTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return null;
+  return tools
+    .map((tool) => {
+      const fn = tool.function || tool;
+      if (!fn?.name) return null;
+      return {
+        name: fn.name,
+        description: fn.description || "",
+        input_schema: fn.parameters || { type: "object", properties: {} },
+      };
+    })
+    .filter(Boolean);
+}
+
+// Converte os blocos tool_use da resposta Anthropic para o shape tool_calls do OpenAI,
+// que é o formato esperado por board-tools.service (call.function.name / arguments).
+function fromAnthropicToolUse(content) {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((block) => block.type === "tool_use")
+    .map((block) => ({
+      id: block.id,
+      type: "function",
+      function: {
+        name: block.name,
+        arguments: JSON.stringify(block.input || {}),
+      },
+    }));
+}
+
 async function createAnthropicChatCompletion({
   messages,
   model,
   temperature = 0.3,
   max_tokens = 1200,
+  tools = null,
   apiKey,
   baseUrl,
   provider = null,
@@ -110,16 +145,24 @@ async function createAnthropicChatCompletion({
     headers["x-api-key"] = apiKey;
   }
 
+  const body = {
+    model: model || "claude-sonnet-4-20250514",
+    max_tokens: max_tokens || 1200,
+    temperature,
+    system: systemParts.length ? systemParts.join("\n\n") : undefined,
+    messages: conversation,
+  };
+
+  const anthropicTools = toAnthropicTools(tools);
+  if (anthropicTools) {
+    body.tools = anthropicTools;
+    body.tool_choice = { type: "auto" };
+  }
+
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/messages`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model: model || "claude-sonnet-4-20250514",
-      max_tokens: max_tokens || 1200,
-      temperature,
-      system: systemParts.length ? systemParts.join("\n\n") : undefined,
-      messages: conversation,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -134,7 +177,7 @@ async function createAnthropicChatCompletion({
 
   return {
     content: textBlock?.text || "",
-    tool_calls: [],
+    tool_calls: fromAnthropicToolUse(payload.content),
     raw: payload,
   };
 }
