@@ -30,7 +30,10 @@ async function extractPdf(buffer) {
   try {
     parser = new PDFParse({ data: buffer });
     const result = await parser.getText();
-    return String(result?.text || "").replace(/\s+/g, " ").trim();
+    return String(result?.text || "")
+      .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, " ") // remove marcadores de página do pdf-parse v2
+      .replace(/\s+/g, " ")
+      .trim();
   } catch (error) {
     console.warn("[ingestion] PDF parse falhou:", error.message);
     return "";
@@ -455,6 +458,7 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
 module.exports = {
   analyze,
   apply,
+  extractTextFromFile,
   extractTextFromFiles,
   normalizeProposal,
 };

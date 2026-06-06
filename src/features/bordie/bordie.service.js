@@ -41,9 +41,10 @@ async function processAttachments(attachments = []) {
     }
     let text = "";
     try {
-      text = await ingestionService.extractTextFromFiles([
+      text = await ingestionService.extractTextFromFile(
         { originalname: name, mimetype: a.mime || "application/octet-stream", buffer },
-      ]);
+        60000
+      );
     } catch (error) {
       console.warn("[bordie] extração de anexo falhou:", error.message);
     }
