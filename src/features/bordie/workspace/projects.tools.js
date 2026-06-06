@@ -61,7 +61,9 @@ function toProjectEntity(project) {
       due_date: json.due_date || null,
       has_deadline: Boolean(json.has_deadline),
       budget: json.budget != null ? Number(json.budget) : null,
+      folder: json.folder?.name || null,
       client_id: json.client_id || null,
+      client_name: json.client?.name || null,
     },
     open: { kind: "project", id: json.id, name: json.name },
   };
