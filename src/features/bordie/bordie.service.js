@@ -8,6 +8,51 @@ const boardsService = require("../boards/boards.service");
 const policyEngine = require("./policy-engine.service");
 const actionExecutor = require("./action-executor.service");
 const workspaceAgent = require("./workspace-agent.service");
+const ingestionService = require("../ingestion/ingestion.service");
+
+function bufferFromDataUrl(dataUrl) {
+  const marker = "base64,";
+  const idx = String(dataUrl || "").indexOf(marker);
+  if (idx === -1) return null;
+  try {
+    return Buffer.from(dataUrl.slice(idx + marker.length), "base64");
+  } catch {
+    return null;
+  }
+}
+
+// Imagens vão multimodais (o modelo lê o arquivo). Demais tipos (PDF/doc/txt…)
+// o modelo não lê pelo proxy, então extraímos o texto e mandamos como conteúdo.
+async function processAttachments(attachments = []) {
+  const images = [];
+  const textBlocks = [];
+
+  for (const a of attachments) {
+    if (!a?.data) continue;
+    if ((a.mime || "").startsWith("image/")) {
+      images.push(a);
+      continue;
+    }
+    const buffer = bufferFromDataUrl(a.data);
+    if (!buffer) continue;
+    try {
+      const text = await ingestionService.extractTextFromFiles([
+        {
+          originalname: a.name || "arquivo",
+          mimetype: a.mime || "application/octet-stream",
+          buffer,
+        },
+      ]);
+      if (text && text.trim()) {
+        textBlocks.push(`Conteúdo do arquivo "${a.name || "arquivo"}":\n${text.trim()}`);
+      }
+    } catch (error) {
+      console.warn("[bordie] extração de anexo falhou:", error.message);
+    }
+  }
+
+  return { images, textBlocks };
+}
 
 function buildScopeFromContext(context = {}) {
   return {
@@ -346,10 +391,15 @@ async function runChat({
   } else {
     // --- Agente de workspace (projetos/clientes/agenda) — separado em código. ---
     try {
+      const { images, textBlocks } = await processAttachments(attachments);
+      const effectiveMessage = textBlocks.length
+        ? `${textBlocks.join("\n\n")}\n\n---\n\n${message || "Analise o conteúdo do(s) arquivo(s) acima."}`
+        : message;
+
       const agentResult = await workspaceAgent.runWorkspaceAgent({
-        message,
+        message: effectiveMessage,
         history,
-        attachments,
+        attachments: images,
         systemMessages: buildWorkspaceSystemMessages({
           systemPrompt,
           context: normalizedContext,
