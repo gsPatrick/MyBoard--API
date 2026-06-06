@@ -149,18 +149,15 @@ async function runWorkspaceAgent({
       }
     }
 
-    // Depois de preparar uma escrita, forçamos uma resposta final em texto (sem novas tools)
-    // para o modelo descrever a ação pendente sem executá-la nem duplicá-la.
+    // Depois de preparar uma escrita, encerramos sem uma 2ª chamada ao LLM.
+    // A resposta sai direto do resumo da ação — evita dobrar a latência (e o
+    // timeout do gateway) em mensagens longas, e não executa nada automaticamente.
     if (hasWrite) {
-      try {
-        const finalCompletion = await aiRuntime.createChatCompletion(tenantId, {
-          messages,
-          temperature: 0.3,
-          max_tokens: 700,
-        });
-        if (finalCompletion.content) reply = finalCompletion.content;
-      } catch {
-        // mantém o reply atual
+      const summaries = actions.map((a) => a.summary).filter(Boolean);
+      if (summaries.length) {
+        reply = summaries.join("\n\n");
+      } else if (!reply) {
+        reply = "Preparei a ação.";
       }
       break;
     }
