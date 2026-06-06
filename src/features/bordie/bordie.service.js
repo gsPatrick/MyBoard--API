@@ -296,7 +296,12 @@ async function runChat({
     isSuperAdmin: userRole === "super_admin",
   };
   const normalizedContext = await enrichContextWithBoard(context, serviceCtx);
-  const intent = intentRouter.detectIntent({ message, mode, context: normalizedContext });
+  const intent = await intentRouter.routeIntent({
+    message,
+    mode,
+    context: normalizedContext,
+    tenantId,
+  });
   const systemPrompt = promptLoader.composeSystemPrompt(intent.promptParts);
   const { contextPack, rag, intel } = await buildRagContext(message, normalizedContext, tenantId);
 
