@@ -33,21 +33,28 @@ async function processAttachments(attachments = []) {
       images.push(a);
       continue;
     }
+    const name = a.name || "arquivo";
     const buffer = bufferFromDataUrl(a.data);
-    if (!buffer) continue;
+    if (!buffer) {
+      textBlocks.push(`O arquivo "${name}" foi anexado, mas chegou vazio/corrompido.`);
+      continue;
+    }
+    let text = "";
     try {
-      const text = await ingestionService.extractTextFromFiles([
-        {
-          originalname: a.name || "arquivo",
-          mimetype: a.mime || "application/octet-stream",
-          buffer,
-        },
+      text = await ingestionService.extractTextFromFiles([
+        { originalname: name, mimetype: a.mime || "application/octet-stream", buffer },
       ]);
-      if (text && text.trim()) {
-        textBlocks.push(`Conteúdo do arquivo "${a.name || "arquivo"}":\n${text.trim()}`);
-      }
     } catch (error) {
       console.warn("[bordie] extração de anexo falhou:", error.message);
+    }
+    text = (text || "").trim();
+    console.log(`[bordie] anexo "${name}" (${a.mime || "?"}, ${buffer.length}b) -> ${text.length} chars`);
+    if (text) {
+      textBlocks.push(`Conteúdo do arquivo "${name}":\n${text}`);
+    } else {
+      textBlocks.push(
+        `O arquivo "${name}" foi anexado, mas NÃO consegui extrair texto dele (provavelmente é um PDF escaneado/sem camada de texto, ou formato não suportado). NÃO invente o conteúdo — diga isso ao usuário e sugira enviar a versão em texto ou uma imagem.`
+      );
     }
   }
 
