@@ -1,6 +1,6 @@
 const projectsService = require("../../projects/projects.service");
 const clientsService = require("../../clients/clients.service");
-const { PROJECT_STATUSES, PROJECT_PRIORITIES } = require("../../../config/constants");
+const { PROJECT_STATUSES, PROJECT_PRIORITIES, PROJECT_ORIGINS } = require("../../../config/constants");
 
 const STATUS_LABELS = {
   draft: "Rascunho",
@@ -158,7 +158,12 @@ const definitions = [
           status: { type: "string", description: "Status inicial (padrão em andamento)." },
           priority: { type: "string", enum: PROJECT_PRIORITIES },
           due_date: { type: "string", description: "Prazo (YYYY-MM-DD). Se enviado, vira deadline." },
-          budget: { type: "number", description: "Orçamento em reais." },
+          budget: { type: "number", description: "Orçamento/valor em reais." },
+          origin: {
+            type: "string",
+            enum: PROJECT_ORIGINS,
+            description: "Origem do projeto: own (próprio), 99freelas ou workana.",
+          },
         },
         required: ["name"],
       },
@@ -264,6 +269,7 @@ const tools = {
         status: resolveStatusFilter(args.status) || undefined,
         priority: args.priority || undefined,
         budget: args.budget != null ? args.budget : undefined,
+        origin: PROJECT_ORIGINS.includes(args.origin) ? args.origin : undefined,
       };
       if (args.due_date) {
         payload.has_deadline = true;
