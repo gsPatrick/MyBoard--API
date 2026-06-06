@@ -32,6 +32,7 @@ function parseArgs(raw) {
 async function runWorkspaceAgent({
   message,
   history = [],
+  attachments = [],
   systemMessages = [],
   tenantId,
   ctx,
@@ -46,7 +47,24 @@ async function runWorkspaceAgent({
       content: item.content,
     });
   }
-  messages.push({ role: "user", content: message });
+
+  // Mensagem do usuário — multimodal quando há arquivo anexado (manda o arquivo
+  // de verdade, não o texto extraído).
+  const validAttachments = (attachments || []).filter((a) => a && a.data);
+  if (validAttachments.length) {
+    messages.push({
+      role: "user",
+      content: [
+        { type: "text", text: message || "Veja o arquivo anexado." },
+        ...validAttachments.map((a) => ({
+          type: "image_url",
+          image_url: { url: a.data },
+        })),
+      ],
+    });
+  } else {
+    messages.push({ role: "user", content: message });
+  }
 
   const entities = [];
   const seenEntity = new Set();

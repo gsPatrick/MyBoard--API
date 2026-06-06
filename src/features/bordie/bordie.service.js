@@ -284,6 +284,7 @@ async function runChat({
   message,
   context = {},
   history = [],
+  attachments = [],
   mode = "chat",
   tenantId,
   userId,
@@ -348,6 +349,7 @@ async function runChat({
       const agentResult = await workspaceAgent.runWorkspaceAgent({
         message,
         history,
+        attachments,
         systemMessages: buildWorkspaceSystemMessages({
           systemPrompt,
           context: normalizedContext,

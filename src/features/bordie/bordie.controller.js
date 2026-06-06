@@ -9,6 +9,7 @@ const chat = catchAsync(async (req, res) => {
     message: req.body.message,
     context: req.body.context || {},
     history: req.body.history || [],
+    attachments: Array.isArray(req.body.attachments) ? req.body.attachments : [],
     tenantId: ctx.tenantId,
     userId: ctx.userId,
     userRole: ctx.role,
