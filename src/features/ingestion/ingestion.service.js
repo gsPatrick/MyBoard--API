@@ -109,7 +109,7 @@ Schema (use exatamente estas chaves; use null quando não houver informação �
 {
   "client": {
     "name": string|null, "email": string|null, "company": string|null,
-    "phone": string|null, "document": string|null, "notes": string|null
+    "phone": string|null, "cpf": string|null, "cnpj": string|null, "notes": string|null
   } | null,
   "project": {
     "name": string|null, "description": string|null,
@@ -126,9 +126,12 @@ Schema (use exatamente estas chaves; use null quando não houver informação �
 }
 
 Regras:
-- Extraia TODAS as informações úteis: dados do cliente, do projeto, escopo, links, repositórios, deploy, ambiente e CREDENCIAIS (senhas, tokens, api keys, usuários/logins, strings de conexão).
+- Extraia TODAS as informações úteis e NÃO esqueça nada relevante: dados do cliente, do projeto, escopo, links, repositórios, deploy, ambiente, stack/tecnologias e CREDENCIAIS (senhas, tokens, api keys, usuários/logins, strings de conexão).
+- ORIGEM/plataforma: se o conteúdo vier do 99Freelas defina origin="99freelas"; se for Workana, "workana"; senão "own". Quando houver, capture o LINK do projeto na plataforma e o LINK do chat como details com category="links" (labels "Link do projeto na plataforma" e "Link do chat").
+- CLIENTE: coloque CPF em client.cpf e CNPJ em client.cnpj (o cliente pode ter os dois). Observações do cliente vão em client.notes.
+- SEPARE bem por category: tecnologias/stack → "environment" (label "Stack" ou "Tecnologias"); URLs e links → "links"; passos/instruções de deploy → "deployment"; escopo/requisitos → "scope"; documentação → "documentation"; o resto → "custom". Não jogue tudo em "custom".
 - Marque is_secret=true e category="credentials" para qualquer segredo (senha, token, chave, secret, login com senha, connection string).
-- "label" é um rótulo curto legível (ex.: "Senha do banco", "Repositório GitHub", "URL de produção"). "value" é o valor literal encontrado.
+- "label" é um rótulo curto legível (ex.: "Senha do banco", "Repositório GitHub", "URL de produção", "Stack"). "value" é o valor literal encontrado.
 - Não duplique itens. Responda em português. Retorne apenas o JSON.`;
 
 function parseJsonLoose(content) {
@@ -161,7 +164,8 @@ function normalizeClient(raw) {
     email: cleanString(raw.email, 255),
     company: cleanString(raw.company, 200),
     phone: cleanString(raw.phone, 50),
-    document: cleanString(raw.document, 50),
+    cpf: cleanString(raw.cpf || raw.document, 20),
+    cnpj: cleanString(raw.cnpj, 20),
     notes: cleanString(raw.notes, 4000),
   };
   return Object.values(client).some(Boolean) ? client : null;
@@ -291,7 +295,7 @@ async function analyze({ files = [], tenantId }) {
 function clientPayload(client) {
   if (!client) return {};
   const payload = {};
-  for (const field of ["name", "email", "company", "phone", "document", "notes"]) {
+  for (const field of ["name", "email", "company", "phone", "document", "cpf", "cnpj", "notes"]) {
     if (client[field] != null) payload[field] = client[field];
   }
   return payload;
@@ -310,6 +314,8 @@ async function findExistingClient(tenantId, client) {
   if (!client) return null;
   const or = [];
   if (client.document) or.push({ document: client.document });
+  if (client.cpf) or.push({ cpf: client.cpf });
+  if (client.cnpj) or.push({ cnpj: client.cnpj });
   if (client.email) or.push({ email: { [Op.iLike]: client.email } });
   if (client.name) or.push({ name: { [Op.iLike]: client.name } });
   if (!or.length) return null;

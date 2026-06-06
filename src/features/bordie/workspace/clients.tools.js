@@ -23,6 +23,8 @@ function toClientEntity(client) {
       email: json.email || null,
       phone: json.phone || null,
       company: json.company || null,
+      cpf: json.cpf || null,
+      cnpj: json.cnpj || null,
       importance_level: json.importance_level || null,
     },
     open: { kind: "client", id: json.id, name: json.name },
@@ -101,8 +103,10 @@ const definitions = [
           email: { type: "string" },
           company: { type: "string", description: "Empresa." },
           phone: { type: "string" },
+          cpf: { type: "string", description: "CPF (pessoa física)." },
+          cnpj: { type: "string", description: "CNPJ (pessoa jurídica)." },
           importance_level: { type: "string", enum: IMPORTANCE_LEVELS },
-          notes: { type: "string" },
+          notes: { type: "string", description: "Observações." },
         },
         required: ["name"],
       },
@@ -122,6 +126,9 @@ const definitions = [
           email: { type: "string" },
           company: { type: "string" },
           phone: { type: "string" },
+          cpf: { type: "string" },
+          cnpj: { type: "string" },
+          notes: { type: "string", description: "Observações." },
           status: { type: "string", enum: CLIENT_STATUSES },
           importance_level: { type: "string", enum: IMPORTANCE_LEVELS },
         },
@@ -188,6 +195,8 @@ const tools = {
         email: args.email || null,
         company: args.company || null,
         phone: args.phone || null,
+        cpf: args.cpf || null,
+        cnpj: args.cnpj || null,
         importance_level: args.importance_level || undefined,
         notes: args.notes || null,
       };
@@ -232,6 +241,9 @@ const tools = {
       if (args.email !== undefined) changes.email = args.email;
       if (args.company !== undefined) changes.company = args.company;
       if (args.phone !== undefined) changes.phone = args.phone;
+      if (args.cpf !== undefined) changes.cpf = args.cpf;
+      if (args.cnpj !== undefined) changes.cnpj = args.cnpj;
+      if (args.notes !== undefined) changes.notes = args.notes;
       if (args.status) changes.status = args.status;
       if (args.importance_level) changes.importance_level = args.importance_level;
 

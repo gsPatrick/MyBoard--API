@@ -61,6 +61,8 @@ module.exports = (sequelize) => {
       company: { type: DataTypes.STRING(200), allowNull: true },
       phone: { type: DataTypes.STRING(50), allowNull: true },
       document: { type: DataTypes.STRING(50), allowNull: true },
+      cpf: { type: DataTypes.STRING(20), allowNull: true },
+      cnpj: { type: DataTypes.STRING(20), allowNull: true },
       status: {
         type: DataTypes.ENUM(...CLIENT_STATUSES),
         allowNull: false,

@@ -102,6 +102,8 @@ async function createClient(payload, ctx) {
     company: payload.company?.trim() || null,
     phone: payload.phone?.trim() || null,
     document: payload.document?.trim() || null,
+    cpf: payload.cpf?.trim() || null,
+    cnpj: payload.cnpj?.trim() || null,
     status: payload.status || "active",
     importance_level: payload.importance_level || "normal",
     is_hidden: payload.is_hidden ?? false,
@@ -141,7 +143,7 @@ async function updateClient(id, payload, ctx) {
   assertResourceTenant(client, ctx, "CLIENT_NOT_FOUND");
 
   const fields = [
-    "name", "email", "company", "phone", "document", "status", "notes",
+    "name", "email", "company", "phone", "document", "cpf", "cnpj", "status", "notes",
     "importance_level", "is_hidden", "is_active", "avatar_media_id",
   ];
   const updates = {};
