@@ -1,8 +1,13 @@
 const projects = require("./projects.tools");
 const clients = require("./clients.tools");
 const agenda = require("./agenda.tools");
+const finance = require("./finance.tools");
+const demands = require("./demands.tools");
+const organization = require("./organization.tools");
+const details = require("./details.tools");
+const overview = require("./overview.tools");
 
-const MODULES = [projects, clients, agenda];
+const MODULES = [projects, clients, agenda, finance, demands, organization, details, overview];
 
 // Definições no formato function-calling (OpenAI) para enviar ao LLM.
 const toolDefinitions = MODULES.flatMap((mod) => mod.definitions);
@@ -29,4 +34,9 @@ module.exports = {
   toProjectEntity: projects.toProjectEntity,
   toClientEntity: clients.toClientEntity,
   toAgendaEntity: agenda.toAgendaEntity,
+  toFinanceEntity: finance.toFinanceEntity,
+  toDemandEntity: demands.toDemandEntity,
+  toFolderEntity: organization.toFolderEntity,
+  toTagEntity: organization.toTagEntity,
+  toDetailEntity: details.toDetailEntity,
 };

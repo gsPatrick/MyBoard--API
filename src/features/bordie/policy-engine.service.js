@@ -17,6 +17,8 @@ const SENSITIVE_ACTION_TYPES = new Set([
   "project_delete",
   "client_delete",
   "agenda_delete",
+  "finance_delete",
+  "demand_delete",
 ]);
 
 const AUTO_SAFE_ACTION_TYPES = new Set([
