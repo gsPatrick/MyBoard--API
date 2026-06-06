@@ -49,6 +49,13 @@ function toProjectEntity(project) {
     status_label: statusLabel(json.status),
     color: json.color || "#3b82f6",
     icon: "project",
+    // Avatar do cliente dono — passado cru para o frontend resolver com resolveMediaUrl.
+    client_avatar: json.client?.avatar
+      ? {
+          public_url: json.client.avatar.public_url || null,
+          storage_path: json.client.avatar.storage_path || null,
+        }
+      : null,
     meta: {
       priority: json.priority || null,
       due_date: json.due_date || null,
