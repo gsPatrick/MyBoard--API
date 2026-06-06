@@ -96,7 +96,7 @@ const definitions = [
     function: {
       name: "get_project_details",
       description:
-        "Retorna dados/detalhes guardados de um projeto: credenciais (VPS, FTP, banco, e-mail, API), links, repositório (GitHub), deploy, ambiente, escopo, documentação e notas. Use quando o usuário pedir algo como 'me passa os dados da VPS', 'qual o acesso do banco', 'link do repositório', 'credenciais do projeto X'. Revela os valores (inclusive senhas) para o usuário.",
+        "Retorna QUALQUER informação/dado guardado de um projeto: credenciais (VPS, FTP, banco, e-mail, API), links, repositório (GitHub), deploy, ambiente, escopo, documentação, notas, descrição e campos personalizados. Use sempre que o usuário pedir 'me passa os dados de X', 'qual o acesso/link/senha de Y', 'o que tenho guardado no projeto Z'. Passe em 'query' o que ele pediu (ex.: 'vps', 'banco', 'github') — se não bater com nada, traz tudo. Revela os valores (inclusive senhas) para o usuário copiar.",
       parameters: {
         type: "object",
         properties: {
@@ -146,22 +146,42 @@ const tools = {
         };
       }
 
-      const filtered = (details || []).filter((d) => matchesQuery(d, args.query));
-      const entities = filtered.map(toDetailEntity);
+      let all = Array.isArray(details) ? [...details] : [];
+
+      // A descrição do projeto também é "informação guardada" — entra como um detalhe.
+      if (project.description && (!args.category || args.category === "notes")) {
+        all.push({
+          id: "__description",
+          label: "Descrição",
+          category: "notes",
+          value: project.description,
+          metadata: {},
+        });
+      }
+
+      // Filtro como RANKING, não exclusão: se a busca não casar com nada, traz tudo
+      // (a IA decide o que é relevante — nunca esconde informação).
+      let selected = all;
+      if (args.query) {
+        const matched = all.filter((d) => matchesQuery(d, args.query));
+        selected = matched.length ? matched : all;
+      }
+
+      const entities = selected.map(toDetailEntity);
 
       return {
         summary: {
           project: project.name,
-          total: entities.length,
           query: args.query || "todos",
-          details: entities.map((e) => ({
-            label: e.title,
-            category: e.category,
-            kind: e.kind,
-            fields: e.fields.map((f) => f.label),
+          mostrando: entities.length,
+          // inventário completo do que existe, para a IA saber o que mais há guardado
+          disponivel: all.map((d) => ({
+            label: d.label,
+            category: d.category,
+            kind: d.metadata?.kind || null,
           })),
           note:
-            "A interface já mostra os valores com botão de copiar. No texto, NÃO repita senhas/segredos — só diga que trouxe os dados.",
+            "A interface mostra os valores com botão de copiar. No texto, NÃO repita senhas/segredos — apenas diga o que trouxe e ofereça mais se houver outros dados em 'disponivel'.",
         },
         entities,
       };
