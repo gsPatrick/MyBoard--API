@@ -1,5 +1,6 @@
 const projectsService = require("../../projects/projects.service");
 const clientsService = require("../../clients/clients.service");
+const { toClientEntity } = require("./clients.tools");
 const { PROJECT_STATUSES, PROJECT_PRIORITIES, PROJECT_ORIGINS } = require("../../../config/constants");
 
 const STATUS_LABELS = {
@@ -249,22 +250,8 @@ const tools = {
   create_project: {
     kind: "write",
     async build(args = {}, ctx) {
-      let clientId = args.client_id || null;
-      let clientName = args.client_name || null;
-
-      if (!clientId && clientName) {
-        const { items } = await clientsService.listClients({ search: clientName, limit: 5 }, ctx);
-        const match =
-          items.find((c) => c.name?.toLowerCase() === clientName.toLowerCase()) || items[0];
-        if (match) {
-          clientId = match.id;
-          clientName = match.name;
-        }
-      }
-
       const payload = {
         name: String(args.name || "").trim(),
-        client_id: clientId,
         description: args.description || null,
         status: resolveStatusFilter(args.status) || undefined,
         priority: args.priority || undefined,
@@ -276,20 +263,75 @@ const tools = {
         payload.due_date = args.due_date;
       }
 
-      const missing = [];
-      if (!payload.name) missing.push("nome do projeto");
-      if (!payload.client_id) missing.push("cliente");
+      if (!payload.name) {
+        return {
+          action: {
+            type: "project_create",
+            status: "needs_input",
+            missing: ["nome do projeto"],
+            label: "Criar projeto",
+            summary: "Qual o nome do projeto?",
+            payload,
+          },
+        };
+      }
+
+      // Resolve o cliente. Só vincula direto quando há UM match exato; caso
+      // contrário devolve candidatos para o usuário escolher no chat.
+      let clientId = args.client_id || null;
+      const clientName = String(args.client_name || "").trim();
+      let candidates = [];
+
+      if (!clientId && clientName) {
+        const { items } = await clientsService.listClients(
+          { search: clientName, limit: 6, include_inactive: "true" },
+          ctx
+        );
+        const exact = items.filter((c) => c.name?.toLowerCase() === clientName.toLowerCase());
+        if (exact.length === 1) {
+          clientId = exact[0].id;
+        } else {
+          candidates = items;
+        }
+      } else if (!clientId && !clientName) {
+        const { items } = await clientsService.listClients({ limit: 6 }, ctx);
+        candidates = items;
+      }
+
+      if (clientId) {
+        return {
+          action: {
+            type: "project_create",
+            status: "ready",
+            label: `Criar projeto "${payload.name}"`,
+            summary: `Vou criar o projeto "${payload.name}".`,
+            payload: { ...payload, client_id: clientId },
+          },
+        };
+      }
+
+      // Precisa escolher/criar o cliente — seletor visual no chat.
+      const candidateEntities = candidates.map(toClientEntity).filter(Boolean);
+      let summary;
+      if (candidateEntities.length && clientName) {
+        summary = `Achei clientes parecidos com "${clientName}". Escolha um ou crie um novo:`;
+      } else if (candidateEntities.length) {
+        summary = "Para qual cliente é o projeto? Escolha um ou crie um novo:";
+      } else if (clientName) {
+        summary = `Não encontrei o cliente "${clientName}". Crio como novo e vinculo?`;
+      } else {
+        summary = "Você ainda não tem clientes. Quer criar um para vincular?";
+      }
 
       return {
         action: {
           type: "project_create",
-          status: missing.length ? "needs_input" : "ready",
-          missing,
-          label: `Criar projeto "${payload.name || "?"}"${clientName ? ` para ${clientName}` : ""}`,
-          summary: missing.length
-            ? `Faltam dados para criar o projeto: ${missing.join(", ")}.`
-            : `Vou criar o projeto "${payload.name}"${clientName ? ` para o cliente ${clientName}` : ""}.`,
+          status: "needs_client",
+          label: `Criar projeto "${payload.name}"`,
+          summary,
           payload,
+          candidates: candidateEntities,
+          suggested_new_name: clientName || null,
         },
       };
     },

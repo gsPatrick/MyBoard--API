@@ -387,9 +387,15 @@ async function runChat({
         tenantId,
       }))
     );
-    // Só ações prontas viram botão de confirmação; needs_input fica a cargo do texto.
+    // Ações prontas viram confirmação; needs_client vira seletor de cliente.
+    // needs_input fica só no texto.
     candidates.push(
-      ...workspaceActions.filter((action) => action.status === undefined || action.status === "ready")
+      ...workspaceActions.filter(
+        (action) =>
+          action.status === undefined ||
+          action.status === "ready" ||
+          action.status === "needs_client"
+      )
     );
   }
 
