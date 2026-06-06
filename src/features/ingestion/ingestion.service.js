@@ -1,5 +1,5 @@
 const { Op } = require("sequelize");
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 const JSZip = require("jszip");
 const { Client } = require("../../models");
 const AppError = require("../../utils/app-error");
@@ -25,12 +25,21 @@ const SECRET_HINT_REGEX = /senha|password|secret|token|api[_-]?key|chave|access[
 // ---------------------------------------------------------------------------
 
 async function extractPdf(buffer) {
+  // pdf-parse v2: classe PDFParse (a versão antiga era função default).
+  let parser = null;
   try {
-    const parsed = await pdfParse(buffer);
-    return String(parsed.text || "").replace(/\s+/g, " ").trim();
+    parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    return String(result?.text || "").replace(/\s+/g, " ").trim();
   } catch (error) {
     console.warn("[ingestion] PDF parse falhou:", error.message);
     return "";
+  } finally {
+    try {
+      await parser?.destroy();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
