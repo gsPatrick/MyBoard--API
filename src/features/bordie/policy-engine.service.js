@@ -13,6 +13,10 @@ const SENSITIVE_ACTION_TYPES = new Set([
   "board_replace_all",
   "board_delete_elements",
   "workspace_delete",
+  // Ações destrutivas de workspace — sempre exigem confirmação (exceto auto_execute por admin).
+  "project_delete",
+  "client_delete",
+  "agenda_delete",
 ]);
 
 const AUTO_SAFE_ACTION_TYPES = new Set([

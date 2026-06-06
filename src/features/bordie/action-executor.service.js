@@ -2,10 +2,56 @@ const fs = require("fs/promises");
 const path = require("path");
 const boardsService = require("../boards/boards.service");
 const boardTools = require("./board-tools.service");
+const projectsService = require("../projects/projects.service");
+const clientsService = require("../clients/clients.service");
+const agendaService = require("../agenda/agenda.service");
+const workspaceTools = require("./workspace");
 const evolutionClient = require("../../providers/evolution/evolution.client");
 const localStorage = require("../../providers/storage/local-storage.provider");
 const { MediaFile, WhatsappInstance } = require("../../models");
 const AppError = require("../../utils/app-error");
+
+// Executores das ações de workspace (projeto/cliente/agenda) disparadas pelo Bordie.
+// Cada handler chama o service de domínio com o ctx e devolve a entidade resultante
+// (para o frontend renderizar o card de confirmação/sucesso).
+const WORKSPACE_ACTIONS = {
+  async project_create(payload, ctx) {
+    const project = await projectsService.createProject(payload, ctx);
+    return { entity: workspaceTools.toProjectEntity(project), message: `Projeto "${project.name}" criado.` };
+  },
+  async project_update(payload, ctx) {
+    const project = await projectsService.updateProject(payload.id, payload.changes || {}, ctx);
+    return { entity: workspaceTools.toProjectEntity(project), message: `Projeto "${project.name}" atualizado.` };
+  },
+  async project_delete(payload, ctx) {
+    await projectsService.deleteProject(payload.id, ctx);
+    return { entity: null, message: `Projeto "${payload.name || ""}" excluído.` };
+  },
+  async client_create(payload, ctx) {
+    const client = await clientsService.createClient(payload, ctx);
+    return { entity: workspaceTools.toClientEntity(client), message: `Cliente "${client.name}" cadastrado.` };
+  },
+  async client_update(payload, ctx) {
+    const client = await clientsService.updateClient(payload.id, payload.changes || {}, ctx);
+    return { entity: workspaceTools.toClientEntity(client), message: `Cliente "${client.name}" atualizado.` };
+  },
+  async client_delete(payload, ctx) {
+    await clientsService.deleteClient(payload.id, ctx);
+    return { entity: null, message: `Cliente "${payload.name || ""}" excluído.` };
+  },
+  async agenda_create(payload, ctx) {
+    const event = await agendaService.createEvent(payload, ctx);
+    return { entity: workspaceTools.toAgendaEntity(event), message: `Evento "${event.title}" agendado.` };
+  },
+  async agenda_update(payload, ctx) {
+    const event = await agendaService.updateEvent(payload.id, payload.changes || {}, ctx);
+    return { entity: workspaceTools.toAgendaEntity(event), message: `Evento "${event.title}" atualizado.` };
+  },
+  async agenda_delete(payload, ctx) {
+    await agendaService.deleteEvent(payload.id, ctx);
+    return { entity: null, message: `Evento "${payload.title || ""}" excluído.` };
+  },
+};
 
 async function executeBoardAction(action, ctx) {
   const boardId = action.payload?.board_id;
@@ -96,6 +142,12 @@ async function executeAction(action, ctx) {
 
   if (action.type === "send_whatsapp_media") {
     return executeWhatsAppMediaAction(action, ctx);
+  }
+
+  const workspaceHandler = WORKSPACE_ACTIONS[action.type];
+  if (workspaceHandler) {
+    const result = await workspaceHandler(action.payload || {}, ctx);
+    return { type: action.type, ...result };
   }
 
   throw new AppError(`Tipo de ação não suportado: ${action.type}`, 400, "UNSUPPORTED_ACTION");

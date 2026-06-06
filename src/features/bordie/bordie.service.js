@@ -7,6 +7,7 @@ const boardTools = require("./board-tools.service");
 const boardsService = require("../boards/boards.service");
 const policyEngine = require("./policy-engine.service");
 const actionExecutor = require("./action-executor.service");
+const workspaceAgent = require("./workspace-agent.service");
 
 function buildScopeFromContext(context = {}) {
   return {
@@ -216,52 +217,20 @@ async function runBoardFlow({ message, context, history, tenantId, ctx }) {
   }
 }
 
-async function runChat({
-  message,
-  context = {},
-  history = [],
-  mode = "chat",
-  tenantId,
-  userId,
-  userRole,
-}) {
-  const serviceCtx = { tenantId, userId };
-  const normalizedContext = await enrichContextWithBoard(context, serviceCtx);
-  const intent = intentRouter.detectIntent({ message, mode, context: normalizedContext });
-  const systemPrompt = promptLoader.composeSystemPrompt(intent.promptParts);
-  const { contextPack, rag, intel } = await buildRagContext(message, normalizedContext, tenantId);
-
-  let boardResult = null;
-  if (intent.intent === "board") {
-    boardResult = await runBoardFlow({
-      message,
-      context: normalizedContext,
-      history,
-      tenantId,
-      ctx: serviceCtx,
-    });
-  }
-
-  const boardSnapshot = boardTools.summarizeScene(normalizedContext.board?.scene_data);
-  const hasBoard = Boolean(normalizedContext.board?.id);
+function buildBoardMessages({ systemPrompt, context, contextPack, boardResult, history, message }) {
+  const boardSnapshot = boardTools.summarizeScene(context.board?.scene_data);
+  const hasBoard = Boolean(context.board?.id);
 
   const messages = [
     { role: "system", content: systemPrompt },
-    {
-      role: "system",
-      content: `Contexto da tela do usuário:\n${formatScreenContext(normalizedContext)}`,
-    },
+    { role: "system", content: `Contexto da tela do usuário:\n${formatScreenContext(context)}` },
   ];
 
   if (hasBoard && boardSnapshot) {
     messages.push({
       role: "system",
       content: `Snapshot atual do board (use isto — não invente elementos):\n${JSON.stringify(
-        {
-          board_id: normalizedContext.board.id,
-          board_name: normalizedContext.board.name,
-          ...boardSnapshot,
-        },
+        { board_id: context.board.id, board_name: context.board.name, ...boardSnapshot },
         null,
         2
       )}`,
@@ -291,29 +260,133 @@ async function runChat({
   }
 
   messages.push({ role: "user", content: message });
+  return messages;
+}
 
-  let reply = boardResult?.reply || "";
-  if (!reply) {
-    try {
-      const completion = await aiRuntime.createChatCompletion(tenantId, {
-        messages,
-        temperature: mode === "command" ? 0.2 : 0.35,
-        max_tokens: 1400,
+function buildWorkspaceSystemMessages({ systemPrompt, context, contextPack }) {
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "system", content: promptLoader.loadPrompt("modes/workspace_agent") },
+    { role: "system", content: `Contexto da tela do usuário:\n${formatScreenContext(context)}` },
+  ];
+
+  if (contextPack) {
+    messages.push({
+      role: "system",
+      content: `Contexto recuperado (RAG + fatos + mídia):\n${contextPack}`,
+    });
+  }
+
+  return messages;
+}
+
+async function runChat({
+  message,
+  context = {},
+  history = [],
+  mode = "chat",
+  tenantId,
+  userId,
+  userRole,
+}) {
+  const serviceCtx = {
+    tenantId,
+    userId,
+    role: userRole,
+    isSuperAdmin: userRole === "super_admin",
+  };
+  const normalizedContext = await enrichContextWithBoard(context, serviceCtx);
+  const intent = intentRouter.detectIntent({ message, mode, context: normalizedContext });
+  const systemPrompt = promptLoader.composeSystemPrompt(intent.promptParts);
+  const { contextPack, rag, intel } = await buildRagContext(message, normalizedContext, tenantId);
+
+  let reply = "";
+  let entities = [];
+  let workspaceActions = [];
+  let boardResult = null;
+
+  if (intent.intent === "board") {
+    // --- Agente de board/desenho (canvas Excalidraw) — separado em código. ---
+    boardResult = await runBoardFlow({
+      message,
+      context: normalizedContext,
+      history,
+      tenantId,
+      ctx: serviceCtx,
+    });
+
+    reply = boardResult?.reply || "";
+    if (!reply) {
+      const messages = buildBoardMessages({
+        systemPrompt,
+        context: normalizedContext,
+        contextPack,
+        boardResult,
+        history,
+        message,
       });
-      reply = completion.content;
+      try {
+        const completion = await aiRuntime.createChatCompletion(tenantId, {
+          messages,
+          temperature: mode === "command" ? 0.2 : 0.35,
+          max_tokens: 1400,
+        });
+        reply = completion.content;
+      } catch (error) {
+        console.warn("[bordie] chat completion falhou:", error.message);
+        reply = `Não consegui chamar a IA: ${error.message}. Verifique Configurações → IA.`;
+      }
+    }
+  } else {
+    // --- Agente de workspace (projetos/clientes/agenda) — separado em código. ---
+    try {
+      const agentResult = await workspaceAgent.runWorkspaceAgent({
+        message,
+        history,
+        systemMessages: buildWorkspaceSystemMessages({
+          systemPrompt,
+          context: normalizedContext,
+          contextPack,
+        }),
+        tenantId,
+        ctx: serviceCtx,
+      });
+      reply = agentResult.reply;
+      entities = agentResult.entities || [];
+      workspaceActions = agentResult.actions || [];
     } catch (error) {
-      console.warn("[bordie] chat completion falhou:", error.message);
-      reply = `Não consegui chamar a IA: ${error.message}. Verifique Configurações → IA.`;
+      console.warn("[bordie] workspace agent falhou:", error.message);
+      reply = `Não consegui processar agora: ${error.message}. Verifique Configurações → IA.`;
     }
   }
 
-  const candidates = await resolveActionCandidates({
-    message,
-    context: normalizedContext,
-    intel,
-    boardResult,
-    tenantId,
-  });
+  // Monta os candidatos de ação conforme o ramo.
+  const candidates = [];
+  if (intent.intent === "board") {
+    candidates.push(
+      ...(await resolveActionCandidates({
+        message,
+        context: normalizedContext,
+        intel,
+        boardResult,
+        tenantId,
+      }))
+    );
+  } else {
+    candidates.push(
+      ...(await resolveActionCandidates({
+        message,
+        context: normalizedContext,
+        intel,
+        boardResult: null,
+        tenantId,
+      }))
+    );
+    // Só ações prontas viram botão de confirmação; needs_input fica a cargo do texto.
+    candidates.push(
+      ...workspaceActions.filter((action) => action.status === undefined || action.status === "ready")
+    );
+  }
 
   const { actions, policy } = await applyPolicyToCandidates(candidates, {
     tenantId,
@@ -325,6 +398,7 @@ async function runChat({
 
   return {
     reply,
+    entities,
     intent: intent.intent,
     rag_stats: rag?.stats || null,
     facts_found: intel?.facts?.length || 0,
@@ -348,6 +422,7 @@ async function runCommand({ prompt, context = {}, history = [], tenantId, userId
 
   return {
     message: result.reply,
+    entities: result.entities,
     action: result.action,
     actions: result.actions,
     intent: result.intent,
