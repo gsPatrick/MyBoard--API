@@ -22,4 +22,7 @@ router.post(
   ingestionController.apply
 );
 
+// Apenas lê o conteúdo (anexar à conversa) — qualquer usuário autenticado.
+router.post("/extract", uploadMiddleware.array("files", 10), ingestionController.extract);
+
 module.exports = router;

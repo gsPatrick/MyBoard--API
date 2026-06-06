@@ -38,4 +38,14 @@ const apply = catchAsync(async (req, res) => {
   return sendSuccess(res, result);
 });
 
-module.exports = { analyze, apply };
+// Extrai o texto bruto dos arquivos (para anexar à conversa do Bordie, sem criar nada).
+const extract = catchAsync(async (req, res) => {
+  const files = req.files || [];
+  const text = await ingestionService.extractTextFromFiles(files);
+  return sendSuccess(res, {
+    text,
+    files: files.map((f) => f.originalname),
+  });
+});
+
+module.exports = { analyze, apply, extract };
