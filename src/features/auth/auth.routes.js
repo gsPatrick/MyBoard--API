@@ -14,4 +14,12 @@ router.patch("/me", authenticate, authController.updateProfile);
 router.patch("/onboarding", authenticate, authController.updateOnboarding);
 router.post("/change-password", authenticate, authController.changePassword);
 
+// Passkeys / WebAuthn
+router.post("/passkey/login/options", authController.passkeyLoginOptions);
+router.post("/passkey/login/verify", authController.passkeyLoginVerify);
+router.post("/passkey/register/options", authenticate, authController.passkeyRegisterOptions);
+router.post("/passkey/register/verify", authenticate, authController.passkeyRegisterVerify);
+router.get("/passkey", authenticate, authController.passkeyList);
+router.delete("/passkey/:id", authenticate, authController.passkeyDelete);
+
 module.exports = router;

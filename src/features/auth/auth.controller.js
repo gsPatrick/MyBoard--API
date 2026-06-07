@@ -2,6 +2,7 @@ const catchAsync = require("../../middlewares/catch-async");
 const { sendSuccess, sendCreated } = require("../../utils/response");
 const { signAccessToken } = require("../../utils/jwt");
 const authService = require("./auth.service");
+const webauthnService = require("./webauthn.service");
 
 const register = catchAsync(async (req, res) => {
   const result = await authService.register(req.body);
@@ -50,6 +51,37 @@ const changePassword = catchAsync(async (req, res) => {
   return sendSuccess(res, result);
 });
 
+// ---- Passkeys / WebAuthn (Touch ID / Face ID / Windows Hello no navegador) ----
+const passkeyRegisterOptions = catchAsync(async (req, res) => {
+  const result = await webauthnService.registrationOptions(req.user);
+  return sendSuccess(res, result);
+});
+
+const passkeyRegisterVerify = catchAsync(async (req, res) => {
+  const result = await webauthnService.verifyRegistration(req.user, req.body);
+  return sendSuccess(res, result);
+});
+
+const passkeyLoginOptions = catchAsync(async (_req, res) => {
+  const result = await webauthnService.authenticationOptions();
+  return sendSuccess(res, result);
+});
+
+const passkeyLoginVerify = catchAsync(async (req, res) => {
+  const result = await webauthnService.verifyAuthentication(req.body);
+  return sendSuccess(res, result);
+});
+
+const passkeyList = catchAsync(async (req, res) => {
+  const result = await webauthnService.listPasskeys(req.user.id);
+  return sendSuccess(res, result);
+});
+
+const passkeyDelete = catchAsync(async (req, res) => {
+  const result = await webauthnService.deletePasskey(req.user.id, req.params.id);
+  return sendSuccess(res, result);
+});
+
 module.exports = {
   register,
   login,
@@ -60,4 +92,10 @@ module.exports = {
   forgotPassword,
   resetPassword,
   changePassword,
+  passkeyRegisterOptions,
+  passkeyRegisterVerify,
+  passkeyLoginOptions,
+  passkeyLoginVerify,
+  passkeyList,
+  passkeyDelete,
 };
