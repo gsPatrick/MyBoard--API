@@ -9,6 +9,7 @@ router.post("/login", authController.login);
 router.post("/forgot-password", authController.forgotPassword);
 router.post("/reset-password", authController.resetPassword);
 router.get("/me", authenticate, authController.me);
+router.post("/refresh", authenticate, authController.refresh);
 router.patch("/me", authenticate, authController.updateProfile);
 router.patch("/onboarding", authenticate, authController.updateOnboarding);
 router.post("/change-password", authenticate, authController.changePassword);
