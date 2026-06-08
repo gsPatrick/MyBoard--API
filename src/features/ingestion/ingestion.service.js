@@ -387,16 +387,45 @@ function normalizeProposal(raw) {
   };
 }
 
+// Uma rodada de extração. Com `useTools` usa function calling; sem, pede JSON puro.
+async function runExtraction(tenantId, userText, useTools) {
+  const system = useTools
+    ? `${EXTRACTION_SYSTEM_PROMPT}\n\nChame a função extract_crm_data preenchendo o máximo de campos possível.`
+    : EXTRACTION_SYSTEM_PROMPT;
+
+  const options = {
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: userText },
+    ],
+    temperature: 0.1,
+    max_tokens: 2600,
+  };
+  if (useTools) options.tools = [EXTRACT_TOOL];
+
+  const completion = await aiRuntime.createChatCompletion(tenantId, options);
+
+  let raw = null;
+  if (useTools) {
+    const call = (completion.tool_calls || []).find((c) => c.function?.name === "extract_crm_data");
+    if (call?.function?.arguments) {
+      try {
+        raw = JSON.parse(call.function.arguments);
+      } catch {
+        raw = parseJsonLoose(call.function.arguments);
+      }
+    }
+  }
+  if (!raw) raw = parseJsonLoose(completion.content);
+  return raw;
+}
+
 // Roda a extração estruturada sobre um texto já pronto (reusado pela
 // importação de conversas do WhatsApp). Limita o tamanho para não estourar o contexto.
 async function analyzeText({ text, tenantId, maxChars = 60000 }) {
   const clean = String(text || "").trim();
   if (!clean) {
-    throw new AppError(
-      "Não consegui ler texto para analisar.",
-      422,
-      "NO_TEXT_EXTRACTED"
-    );
+    throw new AppError("Não consegui ler texto para analisar.", 422, "NO_TEXT_EXTRACTED");
   }
 
   if (!(await aiRuntime.isConfiguredForTenant(tenantId))) {
@@ -407,36 +436,27 @@ async function analyzeText({ text, tenantId, maxChars = 60000 }) {
     );
   }
 
+  const userText = clean.slice(0, maxChars);
+  let raw = null;
+
+  // 1) Tenta com function calling.
   try {
-    const completion = await aiRuntime.createChatCompletion(tenantId, {
-      messages: [
-        {
-          role: "system",
-          content: `${EXTRACTION_SYSTEM_PROMPT}\n\nChame a função extract_crm_data preenchendo o máximo de campos possível.`,
-        },
-        { role: "user", content: clean.slice(0, maxChars) },
-      ],
-      tools: [EXTRACT_TOOL],
-      temperature: 0.1,
-      max_tokens: 2600,
-    });
-
-    // Preferência: argumentos da função (function calling). Fallback: JSON no texto.
-    let raw = null;
-    const call = (completion.tool_calls || []).find((c) => c.function?.name === "extract_crm_data");
-    if (call?.function?.arguments) {
-      try {
-        raw = JSON.parse(call.function.arguments);
-      } catch {
-        raw = parseJsonLoose(call.function.arguments);
-      }
-    }
-    if (!raw) raw = parseJsonLoose(completion.content);
-
-    return normalizeProposal(raw);
-  } catch (error) {
-    throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
+    raw = await runExtraction(tenantId, userText, true);
+  } catch (toolErr) {
+    // eslint-disable-next-line no-console
+    console.warn("[ingestion] function calling indisponível, usando modo JSON:", toolErr.message);
   }
+
+  // 2) Se falhou OU veio vazio, cai pro modo sem tools (compatível com qualquer modelo).
+  if (raw == null) {
+    try {
+      raw = await runExtraction(tenantId, userText, false);
+    } catch (error) {
+      throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
+    }
+  }
+
+  return normalizeProposal(raw);
 }
 
 async function analyze({ files = [], tenantId }) {
