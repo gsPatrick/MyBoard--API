@@ -1,9 +1,15 @@
 const catchAsync = require("../../middlewares/catch-async");
 const { sendSuccess, sendCreated, sendNoContent } = require("../../utils/response");
 const { buildServiceContext } = require("../../utils/request-context");
+const AppError = require("../../utils/app-error");
 const whatsappService = require("./whatsapp.service");
 const whatsappIngestService = require("./whatsapp-ingest.service");
 const whatsappConversationsService = require("./whatsapp-conversations.service");
+const whatsappImportService = require("./whatsapp-import.service");
+
+function isTruthyFlag(value) {
+  return value === "1" || value === "true" || value === true;
+}
 
 const listInstances = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
@@ -161,9 +167,70 @@ const chatwootWebhook = catchAsync(async (req, res) => {
   return sendSuccess(res, result);
 });
 
+// ---- Importação de conversa exportada (.zip/.txt) ----
+const getClientImportMode = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.getClientMode(req.params.clientId, ctx);
+  return sendSuccess(res, result);
+});
+
+const importClientChat = catchAsync(async (req, res) => {
+  if (!req.file) throw new AppError("Envie o arquivo da conversa (.zip ou .txt).", 400, "FILE_REQUIRED");
+  const ctx = buildServiceContext(req);
+  const confirmSwitch = isTruthyFlag(req.query.confirm ?? req.body?.confirm);
+  const result = await whatsappImportService.importClient(req.params.clientId, req.file, { confirmSwitch }, ctx);
+  return sendCreated(res, result);
+});
+
+const removeClientImport = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.removeClientImport(req.params.clientId, req.params.conversationId, ctx);
+  return sendSuccess(res, result);
+});
+
+const switchClientToLive = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.switchClientToLive(req.params.clientId, ctx);
+  return sendSuccess(res, result);
+});
+
+const getProjectImportMode = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.getProjectMode(req.params.projectId, ctx);
+  return sendSuccess(res, result);
+});
+
+const importProjectChat = catchAsync(async (req, res) => {
+  if (!req.file) throw new AppError("Envie o arquivo da conversa (.zip ou .txt).", 400, "FILE_REQUIRED");
+  const ctx = buildServiceContext(req);
+  const confirmSwitch = isTruthyFlag(req.query.confirm ?? req.body?.confirm);
+  const result = await whatsappImportService.importProject(req.params.projectId, req.file, { confirmSwitch }, ctx);
+  return sendCreated(res, result);
+});
+
+const removeProjectImport = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.removeProjectImport(req.params.projectId, req.params.conversationId, ctx);
+  return sendSuccess(res, result);
+});
+
+const switchProjectToLive = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const result = await whatsappImportService.switchProjectToLive(req.params.projectId, ctx);
+  return sendSuccess(res, result);
+});
+
 module.exports = {
   listInstances,
   createInstance,
+  getClientImportMode,
+  importClientChat,
+  removeClientImport,
+  switchClientToLive,
+  getProjectImportMode,
+  importProjectChat,
+  removeProjectImport,
+  switchProjectToLive,
   syncConnectionState,
   getConnectQr,
   listClientLinks,
