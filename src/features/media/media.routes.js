@@ -10,6 +10,7 @@ router.use(...requireAuth);
 
 router.post("/upload", authorize("admin", "developer"), uploadMiddleware.single("file"), mediaController.upload);
 router.get("/entity/:entityType/:entityId", mediaController.list);
+router.get("/client/:clientId/library", mediaController.clientLibrary);
 router.get("/:id/download", mediaController.download);
 router.get("/:id", mediaController.getById);
 router.delete("/:id", authorize("admin", "developer"), mediaController.remove);

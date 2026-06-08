@@ -11,9 +11,16 @@ const upload = catchAsync(async (req, res) => {
     entityType: req.body.entity_type || req.params.entityType,
     entityId: req.body.entity_id || req.params.entityId,
     kind: req.body.kind || "attachment",
+    category: req.body.category || null,
     ctx,
   });
   return sendCreated(res, media);
+});
+
+const clientLibrary = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const items = await mediaService.listClientLibrary(req.params.clientId, req.query, ctx);
+  return sendSuccess(res, items);
 });
 
 const list = catchAsync(async (req, res) => {
@@ -50,4 +57,4 @@ const remove = catchAsync(async (req, res) => {
   return sendNoContent(res);
 });
 
-module.exports = { upload, list, getById, download, remove };
+module.exports = { upload, list, clientLibrary, getById, download, remove };

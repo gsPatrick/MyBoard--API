@@ -129,7 +129,7 @@ async function transcribeAudio(buffer, mimeType, fileName, tenantId) {
   }
 }
 
-async function saveBufferAsMedia({ buffer, fileName, mimeType, entityType, entityId }) {
+async function saveBufferAsMedia({ buffer, fileName, mimeType, entityType, entityId, category = "conversa" }) {
   const ext = path.extname(fileName) || "";
   const storedName = `${randomUUID()}${ext}`;
   const relativePath = path.join(entityType, entityId, storedName);
@@ -153,7 +153,7 @@ async function saveBufferAsMedia({ buffer, fileName, mimeType, entityType, entit
     storage_disk: "local",
     storage_path: relativePath.replace(/\\/g, "/"),
     public_url: publicUrl,
-    metadata: { source: "whatsapp_rag" },
+    metadata: { source: "whatsapp_rag", category },
   });
 }
 

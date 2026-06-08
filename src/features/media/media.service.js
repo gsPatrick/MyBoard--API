@@ -1,3 +1,4 @@
+const { Op } = require("sequelize");
 const { MediaFile, Client, Project, User } = require("../../models");
 const AppError = require("../../utils/app-error");
 const { MEDIA_ENTITY_TYPES, MEDIA_KINDS, ALLOWED_MIME_TYPES, NOTIFICATION_EVENTS } = require("../../config/constants");
@@ -34,7 +35,7 @@ async function ensureEntityExists(entityType, entityId, ctx) {
   return entity;
 }
 
-async function uploadFile({ file, entityType, entityId, kind = "attachment", ctx }) {
+async function uploadFile({ file, entityType, entityId, kind = "attachment", category = null, ctx }) {
   if (!file) {
     throw new AppError("Arquivo é obrigatório", 400, "VALIDATION_ERROR");
   }
@@ -68,7 +69,7 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", ctx
     storage_path: stored.storage_path,
     public_url: stored.public_url,
     uploaded_by_user_id: ctx?.userId || null,
-    metadata: {},
+    metadata: category ? { category: String(category).slice(0, 40) } : {},
   });
 
   if (kind === "avatar" && entityType === "client") {
@@ -109,17 +110,69 @@ async function uploadFile({ file, entityType, entityId, kind = "attachment", ctx
   return media;
 }
 
-async function listMedia(entityType, entityId, query = {}, ctx) {
-  await ensureEntityExists(entityType, entityId, ctx);
-
-  const where = { entity_type: entityType, entity_id: entityId };
+function applyMediaFilters(where, query = {}) {
   if (query.kind && MEDIA_KINDS.includes(query.kind)) {
     where.kind = query.kind;
   }
+  if (query.category) {
+    where["metadata.category"] = String(query.category);
+  }
+  if (query.q) {
+    where.original_name = { [Op.iLike]: `%${String(query.q).trim()}%` };
+  }
+  return where;
+}
+
+async function listMedia(entityType, entityId, query = {}, ctx) {
+  await ensureEntityExists(entityType, entityId, ctx);
+
+  const where = applyMediaFilters({ entity_type: entityType, entity_id: entityId }, query);
 
   return MediaFile.findAll({
     where,
     order: [["created_at", "DESC"]],
+  });
+}
+
+/**
+ * Biblioteca do cliente: agrega os arquivos do próprio cliente + de todos os
+ * projetos dele (com filtro opcional por projeto/categoria/busca).
+ */
+async function listClientLibrary(clientId, query = {}, ctx) {
+  const client = await ensureEntityExists("client", clientId, ctx);
+
+  const projects = await Project.findAll({
+    where: { client_id: clientId, tenant_id: client.tenant_id },
+    attributes: ["id", "name"],
+  });
+  const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
+  const projectIds = projects.map((p) => p.id);
+
+  const ors = [];
+  if (query.project_id) {
+    // Filtro por um projeto específico
+    if (projectNameById.has(query.project_id)) {
+      ors.push({ entity_type: "project", entity_id: query.project_id });
+    }
+  } else {
+    ors.push({ entity_type: "client", entity_id: clientId });
+    if (projectIds.length) {
+      ors.push({ entity_type: "project", entity_id: { [Op.in]: projectIds } });
+    }
+  }
+  if (!ors.length) return [];
+
+  const where = applyMediaFilters({ [Op.or]: ors }, query);
+
+  const items = await MediaFile.findAll({ where, order: [["created_at", "DESC"]] });
+
+  return items.map((m) => {
+    const json = m.toJSON();
+    json.source_type = m.entity_type;
+    json.source_label =
+      m.entity_type === "project" ? projectNameById.get(m.entity_id) || "Projeto" : "Cliente";
+    json.project_id = m.entity_type === "project" ? m.entity_id : null;
+    return json;
   });
 }
 
@@ -149,6 +202,7 @@ async function deleteMedia(id, ctx) {
 module.exports = {
   uploadFile,
   listMedia,
+  listClientLibrary,
   getMediaById,
   deleteMedia,
 };
