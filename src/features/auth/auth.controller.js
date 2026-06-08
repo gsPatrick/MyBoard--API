@@ -1,16 +1,18 @@
 const catchAsync = require("../../middlewares/catch-async");
 const { sendSuccess, sendCreated } = require("../../utils/response");
-const { signAccessToken } = require("../../utils/jwt");
 const authService = require("./auth.service");
 const webauthnService = require("./webauthn.service");
+const sessionsService = require("./sessions.service");
 
 const register = catchAsync(async (req, res) => {
   const result = await authService.register(req.body);
+  result.token = (await sessionsService.issueWithSession(result.user, req)).token;
   return sendCreated(res, result);
 });
 
 const login = catchAsync(async (req, res) => {
   const result = await authService.login(req.body);
+  result.token = (await sessionsService.issueWithSession(result.user, req)).token;
   return sendSuccess(res, result);
 });
 
@@ -19,9 +21,9 @@ const me = catchAsync(async (req, res) => {
   return sendSuccess(res, result);
 });
 
-// Renova o token (rola os 7 dias) e valida a sessão. Usado pelo login por Touch ID.
+// Renova o token (rola os 7 dias) mantendo a mesma sessão. Usado pelo Touch ID.
 const refresh = catchAsync(async (req, res) => {
-  const token = signAccessToken(req.user);
+  const token = await sessionsService.refreshToken(req);
   const result = await authService.me(req.user.id);
   return sendSuccess(res, { token, ...result });
 });
@@ -69,6 +71,23 @@ const passkeyLoginOptions = catchAsync(async (_req, res) => {
 
 const passkeyLoginVerify = catchAsync(async (req, res) => {
   const result = await webauthnService.verifyAuthentication(req.body);
+  result.token = (await sessionsService.issueWithSession(result.user, req)).token;
+  return sendSuccess(res, result);
+});
+
+// ---- Sessões / dispositivos conectados ----
+const sessionsList = catchAsync(async (req, res) => {
+  const result = await sessionsService.listSessions(req.user.id, req.auth?.jti);
+  return sendSuccess(res, result);
+});
+
+const sessionRevoke = catchAsync(async (req, res) => {
+  const result = await sessionsService.revokeSession(req.user.id, req.params.id, req.auth?.jti);
+  return sendSuccess(res, result);
+});
+
+const sessionsRevokeOthers = catchAsync(async (req, res) => {
+  const result = await sessionsService.revokeOthers(req.user.id, req.auth?.jti);
   return sendSuccess(res, result);
 });
 
@@ -98,4 +117,7 @@ module.exports = {
   passkeyLoginVerify,
   passkeyList,
   passkeyDelete,
+  sessionsList,
+  sessionRevoke,
+  sessionsRevokeOthers,
 };

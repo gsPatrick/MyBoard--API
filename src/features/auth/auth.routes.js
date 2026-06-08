@@ -22,4 +22,9 @@ router.post("/passkey/register/verify", authenticate, authController.passkeyRegi
 router.get("/passkey", authenticate, authController.passkeyList);
 router.delete("/passkey/:id", authenticate, authController.passkeyDelete);
 
+// Sessões / dispositivos conectados (ordem: /others antes de /:id)
+router.get("/sessions", authenticate, authController.sessionsList);
+router.delete("/sessions/others", authenticate, authController.sessionsRevokeOthers);
+router.delete("/sessions/:id", authenticate, authController.sessionRevoke);
+
 module.exports = router;

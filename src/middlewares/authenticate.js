@@ -2,6 +2,7 @@ const AppError = require("../utils/app-error");
 const { verifyAccessToken } = require("../utils/jwt");
 const { User, Tenant } = require("../models");
 const catchAsync = require("./catch-async");
+const sessionsService = require("../features/auth/sessions.service");
 
 const authenticate = catchAsync(async (req, _res, next) => {
   const header = req.headers.authorization || "";
@@ -12,6 +13,10 @@ const authenticate = catchAsync(async (req, _res, next) => {
   }
 
   const payload = verifyAccessToken(token);
+
+  // Bloqueia se a sessão deste token foi desconectada; atualiza "visto por último".
+  await sessionsService.verifyAndTouch(payload, req);
+
   const user = await User.scope("withPassword").findByPk(payload.sub, {
     include: [{ model: Tenant, as: "tenant", required: false }],
   });
