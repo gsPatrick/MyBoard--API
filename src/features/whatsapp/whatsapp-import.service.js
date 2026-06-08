@@ -20,7 +20,53 @@ const factExtraction = require("../../rag/fact-extraction.service");
 const ingestService = require("../../rag/ingest.service");
 const mediaProcessor = require("../../rag/media-processor.service");
 const ingestionService = require("../ingestion/ingestion.service");
+const aiRuntime = require("../settings/ai-runtime.service");
 const parser = require("./whatsapp-export-parser");
+
+const CURATION_PROMPT = `Você recebe um trecho de conversa de WhatsApp (e, quando houver, textos de documentos e transcrições de áudio) entre um prestador e um cliente, sobre um projeto.
+Sua tarefa: EXTRAIR e reescrever em tópicos APENAS o que é útil para o negócio e para consultar depois. Inclua quando houver:
+- contexto do cliente e do projeto, objetivos e escopo
+- decisões, combinados e mudanças
+- valores, formas de pagamento e prazos
+- problemas, bugs e pedidos de ajuste
+- credenciais, acessos, links e repositórios (mantenha os valores literais)
+- datas/horários de reunião e responsáveis
+- qualquer informação concreta relevante
+
+DESCARTE: saudações, conversa fiada, "ok", "kkk", emojis soltos, figurinhas, mensagens vazias ou sem informação.
+Escreva em português, em tópicos curtos e densos, sem inventar nada. Se o trecho não tiver NADA aproveitável, responda exatamente: (vazio)`;
+
+/** Destila o transcript: a IA mantém o importante e descarta as pontas soltas. */
+async function curateTranscript({ tenantId, transcript }) {
+  if (!transcript.trim()) return "";
+  if (!(await aiRuntime.isConfiguredForTenant(tenantId))) return "";
+
+  const WIN = 12000;
+  const MAX_WINDOWS = Number(process.env.WHATSAPP_CURATION_MAX_WINDOWS || 12);
+  const windows = [];
+  for (let i = 0; i < transcript.length && windows.length < MAX_WINDOWS; i += WIN) {
+    windows.push(transcript.slice(i, i + WIN));
+  }
+
+  const parts = [];
+  for (const w of windows) {
+    try {
+      const completion = await aiRuntime.createChatCompletion(tenantId, {
+        messages: [
+          { role: "system", content: CURATION_PROMPT },
+          { role: "user", content: w },
+        ],
+        temperature: 0.1,
+        max_tokens: 1500,
+      });
+      const out = String(completion.content || "").trim();
+      if (out && !/^\(?\s*vazio\s*\)?\.?$/i.test(out)) parts.push(out);
+    } catch {
+      /* best-effort por janela */
+    }
+  }
+  return parts.join("\n\n").trim();
+}
 
 const MIME_BY_EXT = {
   pdf: "application/pdf",
@@ -301,15 +347,11 @@ async function processAttachments({ tenantId, parsed, clientId, projectId }) {
 }
 
 /** Roda a extração estruturada por IA e aplica nos lugares certos (detalhes/demandas/reuniões). */
-async function runAiExtraction({ parsed, clientId, projectId, ctx }) {
+async function runAiExtraction({ text, clientId, projectId, ctx }) {
   try {
-    const transcript = parsed.messages
-      .filter((m) => !m.isSystem)
-      .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
-      .join("\n");
-    if (!transcript.trim()) return null;
+    if (!text || !text.trim()) return null;
 
-    const proposal = await ingestionService.analyzeText({ text: transcript, tenantId: ctx.tenantId });
+    const proposal = await ingestionService.analyzeText({ text, tenantId: ctx.tenantId });
     const target = projectId ? { project_id: projectId } : { client_id: clientId };
     return await ingestionService.apply({
       proposal,
@@ -377,24 +419,60 @@ async function ingestExport({ tenantId, externalThreadId, clientId, projectId, p
     return conversation;
   });
 
-  // Indexação/embeddings e fatos fora da transação (operações pesadas/idempotentes).
-  await ingestService.indexConversationMessages(conv.id);
-  await extractFactsBatched({
-    tenantId,
-    clientId,
-    projectId,
-    conversationId: conv.id,
-    messages: parsed.messages,
-  });
+  // Transcript completo (texto + mídia extraída/transcrita).
+  const transcript = parsed.messages
+    .filter((m) => !m.isSystem)
+    .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
+    .join("\n");
 
-  // IA: extrai e organiza nos lugares certos (descrição, credenciais, github,
-  // servidor, demandas, reuniões). Best-effort — não derruba a importação.
-  let aiResult = null;
-  if (ctx) {
-    aiResult = await runAiExtraction({ parsed, clientId, projectId, ctx });
+  // Curadoria pela IA: mantém o importante, descarta as pontas soltas.
+  let digest = "";
+  if (ctx) digest = await curateTranscript({ tenantId, transcript });
+
+  // Indexa SÓ o conteúdo curado no RAG; sem IA/curadoria, cai no fluxo cru.
+  if (digest) {
+    await ingestService.indexConversationContent({ conversation: conv, content: digest });
+  } else {
+    await ingestService.indexConversationMessages(conv.id);
   }
 
-  conv._importStats = { media, ai: aiResult?.actions || null };
+  // Fatos do RAG a partir do conteúdo limpo (ou bruto, se não houver curadoria).
+  if (digest) {
+    try {
+      await factExtraction.upsertFacts({
+        tenantId,
+        clientId,
+        projectId,
+        conversationId: conv.id,
+        sourceChannel: "whatsapp",
+        text: digest,
+      });
+    } catch {
+      /* best-effort */
+    }
+  } else {
+    await extractFactsBatched({
+      tenantId,
+      clientId,
+      projectId,
+      conversationId: conv.id,
+      messages: parsed.messages,
+    });
+  }
+
+  // IA: organiza nos lugares certos (descrição, credenciais, github, servidor,
+  // demandas, reuniões). Usa o digest curado (mais limpo e barato) quando houver.
+  let aiResult = null;
+  if (ctx) {
+    aiResult = await runAiExtraction({
+      text: digest || transcript,
+      clientId,
+      projectId,
+      ctx,
+    });
+  }
+
+  conv._importStats = { media, curated: Boolean(digest), ai: aiResult?.actions || null };
   return conv;
 }
 

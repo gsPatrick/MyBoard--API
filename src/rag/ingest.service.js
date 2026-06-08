@@ -277,6 +277,64 @@ async function ingestMessageRecord({
   return { message, created: true, reindexed: false };
 }
 
+/**
+ * Indexa um CONTEÚDO CURADO (texto limpo) numa conversa existente, substituindo
+ * os chunks. Usado pela importação do WhatsApp: a IA destila o que importa e só
+ * isso vai pro RAG (sem o ruído da conversa crua).
+ */
+async function indexConversationContent({ conversation, content, sourceType = "whatsapp_message" }) {
+  const text = String(content || "").trim();
+  if (!text) return { chunksCreated: 0 };
+
+  const { chunkPlainText } = require("./chunking.service");
+  const now = conversation.last_message_at || new Date();
+  const chunks = chunkPlainText(text, { period_start: now, period_end: now });
+
+  await RagChunk.destroy({ where: { conversation_id: conversation.id } });
+
+  let chunksCreated = 0;
+  for (const chunk of chunks) {
+    const embeddingFields = await resolveEmbeddingFields(chunk.content, conversation.tenant_id);
+    await RagChunk.create({
+      tenant_id: conversation.tenant_id,
+      conversation_id: conversation.id,
+      client_id: conversation.client_id,
+      project_id: conversation.project_id,
+      channel: conversation.channel,
+      source_type: sourceType,
+      chunk_index: chunk.chunk_index,
+      content: chunk.content,
+      content_hash: hashContent(chunk.content),
+      token_estimate: chunk.token_estimate,
+      message_ids: [],
+      period_start: chunk.period_start,
+      period_end: chunk.period_end,
+      embedding_model: embeddingFields.embedding_model,
+      embedding: embeddingFields.embedding,
+      embedding_vector: embeddingFields.embedding_vector,
+      metadata: { curated: true },
+    });
+    chunksCreated += 1;
+  }
+
+  await RagSummary.destroy({
+    where: { conversation_id: conversation.id, level: "thread" },
+  });
+  await RagSummary.create({
+    tenant_id: conversation.tenant_id,
+    conversation_id: conversation.id,
+    client_id: conversation.client_id,
+    project_id: conversation.project_id,
+    level: "thread",
+    content: text.slice(0, 4000),
+    token_estimate: estimateTokens(text),
+    source_chunk_count: chunks.length,
+    metadata: { curated: true },
+  });
+
+  return { chunksCreated };
+}
+
 async function ingestWorkspaceDocument({
   tenantId,
   channel = "workspace",
@@ -374,6 +432,7 @@ async function ingestWorkspaceDocument({
 
 module.exports = {
   indexConversationMessages,
+  indexConversationContent,
   ingestMessageRecord,
   ingestWorkspaceDocument,
   enrichIngestedMessage,
