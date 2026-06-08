@@ -99,6 +99,25 @@ function mimeFromName(name = "") {
 const ATTACH_MAX = Number(process.env.WHATSAPP_IMPORT_MAX_ATTACHMENTS || 40);
 const ATTACH_MAX_BYTES = Number(process.env.WHATSAPP_IMPORT_ATTACHMENT_MAX_MB || 20) * 1024 * 1024;
 
+const CONTRACT_RE = /contrato|contract|proposta|acordo|termo|recibo|nota\s?fiscal|\bnf-?e?\b/i;
+
+/** Classifica o anexo numa categoria útil (não joga tudo em "conversa"). */
+function classifyAttachment({ fileName, mimeType, contentType, extractedText }) {
+  const name = String(fileName || "").toLowerCase();
+  const mime = String(mimeType || "").toLowerCase();
+  const isImage = contentType === "image" || mime.startsWith("image/");
+
+  if (contentType === "audio" || mime.startsWith("audio/")) return "audio";
+  if (contentType === "video" || mime.startsWith("video/")) return "video";
+  if (/logo|marca|brand/.test(name)) return "logo";
+  if (CONTRACT_RE.test(name) || (extractedText && CONTRACT_RE.test(extractedText.slice(0, 3000)))) {
+    return "contrato";
+  }
+  if (isImage) return "imagem";
+  if (/\.(pdf|docx?|xlsx?|pptx?|csv|txt|md|json)$/.test(name)) return "documento";
+  return "outro";
+}
+
 const IMPORT_SOURCE = "import";
 
 // content_type precisa caber no ENUM do RagMessage.
@@ -330,6 +349,18 @@ async function processAttachments({ tenantId, parsed, clientId, projectId }) {
       m.extractedText = extracted;
     }
 
+    // Classifica o anexo (contrato / logo / imagem / áudio / vídeo / documento).
+    const category = classifyAttachment({
+      fileName: m.attachmentName,
+      mimeType,
+      contentType: m.contentType,
+      extractedText: extracted,
+    });
+    const extraMetadata = {};
+    if (m.contentType === "audio" && extracted && !/transcrição (indisponível|pendente|disponível)/i.test(extracted)) {
+      extraMetadata.transcription = extracted.slice(0, 8000);
+    }
+
     // Salva o arquivo para o usuário acessar/baixar (anexo do projeto/cliente).
     try {
       await mediaProcessor.saveBufferAsMedia({
@@ -338,6 +369,8 @@ async function processAttachments({ tenantId, parsed, clientId, projectId }) {
         mimeType,
         entityType,
         entityId,
+        category,
+        extraMetadata,
       });
       saved += 1;
     } catch {
