@@ -19,6 +19,7 @@ const { hashContent } = require("../../rag/content-hash");
 const factExtraction = require("../../rag/fact-extraction.service");
 const ingestService = require("../../rag/ingest.service");
 const mediaProcessor = require("../../rag/media-processor.service");
+const messageOptimizer = require("../../rag/message-optimizer.service");
 const ingestionService = require("../ingestion/ingestion.service");
 const aiRuntime = require("../settings/ai-runtime.service");
 const parser = require("./whatsapp-export-parser");
@@ -432,6 +433,17 @@ async function ingestExport({ tenantId, externalThreadId, clientId, projectId, p
   // Indexa SÓ o conteúdo curado no RAG; sem IA/curadoria, cai no fluxo cru.
   if (digest) {
     await ingestService.indexConversationContent({ conversation: conv, content: digest });
+    // Mensagens cruas ficam guardadas só para visualização → compacta o storage.
+    try {
+      let pass;
+      let guard = 0;
+      do {
+        pass = await messageOptimizer.optimizeConversationStorage(conv.id, { batchSize: 500 });
+        guard += 1;
+      } while (pass.optimized > 0 && guard < 100);
+    } catch {
+      /* otimização best-effort */
+    }
   } else {
     await ingestService.indexConversationMessages(conv.id);
   }
