@@ -32,6 +32,10 @@ const apply = catchAsync(async (req, res) => {
   if (req.body.target_project_id) target.project_id = req.body.target_project_id;
   if (req.body.target_client_id) target.client_id = req.body.target_client_id;
 
+  console.log(
+    `[ingestion] apply: target=${JSON.stringify(target)} proposta(cliente=${Boolean(proposal.client)}, projeto=${Boolean(proposal.project)}, detalhes=${(proposal.details || []).length}) arquivos=${(req.files || []).length}`
+  );
+
   const result = await ingestionService.apply({
     proposal,
     target,
@@ -40,6 +44,10 @@ const apply = catchAsync(async (req, res) => {
     userId: ctx.userId,
     role: ctx.role,
   });
+
+  console.log(
+    `[ingestion] apply OK: client_id=${result.client_id} project_id=${result.project_id} actions=${JSON.stringify(result.actions)}`
+  );
 
   return sendSuccess(res, result);
 });
