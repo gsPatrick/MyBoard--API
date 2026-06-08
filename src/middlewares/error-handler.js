@@ -1,6 +1,17 @@
 const AppError = require("../utils/app-error");
 
-function errorHandler(err, _req, res, _next) {
+function errorHandler(err, req, res, _next) {
+  // Loga TODO erro (antes só o 500 era logado) — facilita acompanhar no terminal.
+  const where = `${req.method} ${req.originalUrl}`;
+  if (err instanceof AppError) {
+    console.warn(
+      `[error] ${where} → ${err.statusCode} ${err.code || "APP_ERROR"}: ${err.message}` +
+        (err.details ? ` | details: ${JSON.stringify(err.details).slice(0, 300)}` : "")
+    );
+  } else {
+    console.error(`[error] ${where} → ${err.name || "Error"}: ${err.message}`);
+  }
+
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       success: false,

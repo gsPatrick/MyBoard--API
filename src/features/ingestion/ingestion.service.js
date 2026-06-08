@@ -403,7 +403,11 @@ async function runExtraction(tenantId, userText, useTools) {
   };
   if (useTools) options.tools = [EXTRACT_TOOL];
 
+  console.log(`[ingestion] chamando IA (modo=${useTools ? "function-calling" : "json"}, ${userText.length} chars)…`);
   const completion = await aiRuntime.createChatCompletion(tenantId, options);
+  console.log(
+    `[ingestion] IA respondeu: tool_calls=${(completion.tool_calls || []).length} content=${(completion.content || "").length}ch`
+  );
 
   let raw = null;
   if (useTools) {
@@ -449,11 +453,17 @@ async function analyzeText({ text, tenantId, maxChars = 60000 }) {
 
   // 2) Se falhou OU veio vazio, cai pro modo sem tools (compatível com qualquer modelo).
   if (raw == null) {
+    console.warn("[ingestion] sem dados via function calling — tentando modo JSON (sem tools)…");
     try {
       raw = await runExtraction(tenantId, userText, false);
     } catch (error) {
+      console.error("[ingestion] extração falhou nos dois modos:", error.message);
       throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
     }
+  }
+
+  if (raw == null) {
+    console.warn("[ingestion] IA não retornou dados estruturados (proposta vazia).");
   }
 
   return normalizeProposal(raw);
@@ -465,6 +475,7 @@ async function analyze({ files = [], tenantId }) {
   }
 
   const text = await extractTextFromFiles(files);
+  console.log(`[ingestion] texto extraído dos arquivos: ${text.length} chars`);
   if (!text.trim()) {
     throw new AppError(
       "Não consegui ler texto dos arquivos enviados (talvez sejam só imagens ou estejam vazios).",

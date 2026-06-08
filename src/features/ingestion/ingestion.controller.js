@@ -5,10 +5,16 @@ const ingestionService = require("./ingestion.service");
 
 const analyze = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
-  const result = await ingestionService.analyze({
-    files: req.files || [],
-    tenantId: ctx.tenantId,
-  });
+  const files = req.files || [];
+  console.log(
+    `[ingestion] analyze: ${files.length} arquivo(s) [${files
+      .map((f) => `${f.originalname}(${f.mimetype},${f.size}b)`)
+      .join(", ")}] tenant=${ctx.tenantId}`
+  );
+  const result = await ingestionService.analyze({ files, tenantId: ctx.tenantId });
+  console.log(
+    `[ingestion] analyze OK: cliente=${result.stats?.has_client} projeto=${result.stats?.has_project} detalhes=${result.stats?.details}`
+  );
   return sendSuccess(res, result);
 });
 
