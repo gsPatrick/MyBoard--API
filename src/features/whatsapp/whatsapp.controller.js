@@ -178,7 +178,12 @@ const importClientChat = catchAsync(async (req, res) => {
   if (!req.file) throw new AppError("Envie o arquivo da conversa (.zip ou .txt).", 400, "FILE_REQUIRED");
   const ctx = buildServiceContext(req);
   const confirmSwitch = isTruthyFlag(req.query.confirm ?? req.body?.confirm);
-  const result = await whatsappImportService.importClient(req.params.clientId, req.file, { confirmSwitch }, ctx);
+  const result = await whatsappImportService.importClient(
+    req.params.clientId,
+    req.file,
+    { confirmSwitch, name: req.body?.name },
+    ctx
+  );
   return sendCreated(res, result);
 });
 
@@ -204,7 +209,12 @@ const importProjectChat = catchAsync(async (req, res) => {
   if (!req.file) throw new AppError("Envie o arquivo da conversa (.zip ou .txt).", 400, "FILE_REQUIRED");
   const ctx = buildServiceContext(req);
   const confirmSwitch = isTruthyFlag(req.query.confirm ?? req.body?.confirm);
-  const result = await whatsappImportService.importProject(req.params.projectId, req.file, { confirmSwitch }, ctx);
+  const result = await whatsappImportService.importProject(
+    req.params.projectId,
+    req.file,
+    { confirmSwitch, name: req.body?.name },
+    ctx
+  );
   return sendCreated(res, result);
 });
 

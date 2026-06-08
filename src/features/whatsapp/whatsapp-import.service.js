@@ -22,6 +22,7 @@ const mediaProcessor = require("../../rag/media-processor.service");
 const messageOptimizer = require("../../rag/message-optimizer.service");
 const ingestionService = require("../ingestion/ingestion.service");
 const aiRuntime = require("../settings/ai-runtime.service");
+const notificationsService = require("../notifications/notifications.service");
 const parser = require("./whatsapp-export-parser");
 
 const CURATION_PROMPT = `Você recebe um trecho de conversa de WhatsApp (e, quando houver, textos de documentos e transcrições de áudio) entre um prestador e um cliente, sobre um projeto.
@@ -371,16 +372,17 @@ async function runAiExtraction({ text, clientId, projectId, ctx }) {
   }
 }
 
-/** Cria a conversa importada (substituindo a anterior de mesma chave) e indexa o RAG. */
-async function ingestExport({ tenantId, externalThreadId, clientId, projectId, parsed, fileName, ctx }) {
+/**
+ * Fase 1 (RÁPIDA): cria a conversa em status "processing" e grava as mensagens
+ * cruas. Retorna em segundos — o pesado (IA/mídia) roda em segundo plano.
+ */
+async function createImportConversation({ tenantId, externalThreadId, clientId, projectId, parsed, fileName, name }) {
   if (!parsed.messages.length) {
     throw new AppError("Não encontrei mensagens nesse arquivo de conversa.", 400, "EMPTY_EXPORT");
   }
+  const title = (name && name.trim()) || parsed.title;
 
-  // Anexos: salva para download + extrai texto/transcreve (enriquece o transcript).
-  const media = await processAttachments({ tenantId, parsed, clientId, projectId });
-
-  const conv = await sequelize.transaction(async (t) => {
+  return sequelize.transaction(async (t) => {
     const existing = await RagConversation.findOne({
       where: { tenant_id: tenantId, external_thread_id: externalThreadId },
       transaction: t,
@@ -394,11 +396,13 @@ async function ingestExport({ tenantId, externalThreadId, clientId, projectId, p
         external_thread_id: externalThreadId,
         client_id: clientId,
         project_id: projectId,
-        title: parsed.title,
-        participant_label: parsed.isGroup ? parsed.title : parsed.senders[0] || null,
+        title,
+        participant_label: parsed.isGroup ? title : parsed.senders[0] || null,
         is_group: parsed.isGroup,
         metadata: {
           source: IMPORT_SOURCE,
+          status: "processing",
+          name: (name && name.trim()) || null,
           file_name: fileName || null,
           imported_at: new Date().toISOString(),
           thread_key: parsed.threadKey,
@@ -419,73 +423,106 @@ async function ingestExport({ tenantId, externalThreadId, clientId, projectId, p
 
     return conversation;
   });
+}
 
-  // Transcript completo (texto + mídia extraída/transcrita).
-  const transcript = parsed.messages
-    .filter((m) => !m.isSystem)
-    .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
-    .join("\n");
-
-  // Curadoria pela IA: mantém o importante, descarta as pontas soltas.
-  let digest = "";
-  if (ctx) digest = await curateTranscript({ tenantId, transcript });
-
-  // Indexa SÓ o conteúdo curado no RAG; sem IA/curadoria, cai no fluxo cru.
-  if (digest) {
-    await ingestService.indexConversationContent({ conversation: conv, content: digest });
-    // Mensagens cruas ficam guardadas só para visualização → compacta o storage.
-    try {
-      let pass;
-      let guard = 0;
-      do {
-        pass = await messageOptimizer.optimizeConversationStorage(conv.id, { batchSize: 500 });
-        guard += 1;
-      } while (pass.optimized > 0 && guard < 100);
-    } catch {
-      /* otimização best-effort */
-    }
-  } else {
-    await ingestService.indexConversationMessages(conv.id);
+async function setImportStatus(conv, patch) {
+  try {
+    await conv.update({ metadata: { ...(conv.metadata || {}), ...patch } });
+  } catch {
+    /* ignore */
   }
+}
 
-  // Fatos do RAG a partir do conteúdo limpo (ou bruto, se não houver curadoria).
-  if (digest) {
-    try {
-      await factExtraction.upsertFacts({
-        tenantId,
-        clientId,
-        projectId,
-        conversationId: conv.id,
-        sourceChannel: "whatsapp",
-        text: digest,
-      });
-    } catch {
-      /* best-effort */
-    }
-  } else {
-    await extractFactsBatched({
-      tenantId,
-      clientId,
-      projectId,
-      conversationId: conv.id,
-      messages: parsed.messages,
+async function notifyImport({ ctx, conv, clientId, projectId, stats, ok }) {
+  if (!ctx?.userId) return;
+  const entityType = projectId ? "project" : "client";
+  const entityId = projectId || clientId;
+  const extras = [];
+  if (ok && stats?.media?.saved) extras.push(`${stats.media.saved} arquivo(s)`);
+  if (ok && stats?.ai?.details) extras.push(`${stats.ai.details} detalhe(s)`);
+  if (ok && stats?.ai?.demands) extras.push(`${stats.ai.demands} demanda(s)`);
+  try {
+    await notificationsService.createAndEmit({
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      eventType: "whatsapp.import",
+      title: ok ? "Importação do WhatsApp concluída" : "Importação do WhatsApp falhou",
+      message: ok
+        ? `“${conv.title}” organizada${extras.length ? ` • ${extras.join(", ")}` : ""}.`
+        : `“${conv.title}” não pôde ser processada.`,
+      entityType,
+      entityId,
+      payload: { conversationId: conv.id },
     });
+  } catch {
+    /* ignore */
   }
+}
 
-  // IA: organiza nos lugares certos (descrição, credenciais, github, servidor,
-  // demandas, reuniões). Usa o digest curado (mais limpo e barato) quando houver.
-  let aiResult = null;
-  if (ctx) {
-    aiResult = await runAiExtraction({
-      text: digest || transcript,
-      clientId,
-      projectId,
-      ctx,
-    });
+/**
+ * Fase 2 (SEGUNDO PLANO): anexos (salvar/extrair/transcrever), curadoria por IA,
+ * indexação, fatos, extração estruturada e notificação ao concluir.
+ */
+async function processImport({ conv, parsed, clientId, projectId, ctx }) {
+  const tenantId = ctx.tenantId;
+  try {
+    const media = await processAttachments({ tenantId, parsed, clientId, projectId });
+
+    const transcript = parsed.messages
+      .filter((m) => !m.isSystem)
+      .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
+      .join("\n");
+
+    let digest = "";
+    if (ctx) digest = await curateTranscript({ tenantId, transcript });
+
+    if (digest) {
+      await ingestService.indexConversationContent({ conversation: conv, content: digest });
+      try {
+        let pass;
+        let guard = 0;
+        do {
+          pass = await messageOptimizer.optimizeConversationStorage(conv.id, { batchSize: 500 });
+          guard += 1;
+        } while (pass.optimized > 0 && guard < 100);
+      } catch {
+        /* otimização best-effort */
+      }
+    } else {
+      await ingestService.indexConversationMessages(conv.id);
+    }
+
+    if (digest) {
+      try {
+        await factExtraction.upsertFacts({
+          tenantId,
+          clientId,
+          projectId,
+          conversationId: conv.id,
+          sourceChannel: "whatsapp",
+          text: digest,
+        });
+      } catch {
+        /* best-effort */
+      }
+    } else {
+      await extractFactsBatched({ tenantId, clientId, projectId, conversationId: conv.id, messages: parsed.messages });
+    }
+
+    let aiResult = null;
+    if (ctx) aiResult = await runAiExtraction({ text: digest || transcript, clientId, projectId, ctx });
+
+    const stats = { media, curated: Boolean(digest), ai: aiResult?.actions || null };
+    await setImportStatus(conv, { status: "done", finished_at: new Date().toISOString(), stats });
+    await notifyImport({ ctx, conv, clientId, projectId, stats, ok: true });
+    return stats;
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("[whatsapp-import] processamento em 2º plano falhou:", error.message);
+    await setImportStatus(conv, { status: "error", error: String(error.message || "erro").slice(0, 300) });
+    await notifyImport({ ctx, conv, clientId, projectId, ok: false });
+    return null;
   }
-
-  conv._importStats = { media, curated: Boolean(digest), ai: aiResult?.actions || null };
-  return conv;
 }
 
 async function loadClient(tenantId, clientId, ctx) {
@@ -522,6 +559,8 @@ function presentImport(conv) {
   return {
     id: conv.id,
     title: conv.title,
+    name: conv.metadata?.name || null,
+    status: conv.metadata?.status || "done",
     is_group: conv.is_group,
     message_count: conv.message_count,
     last_message_at: conv.last_message_at,
@@ -545,7 +584,7 @@ async function getClientMode(clientId, ctx) {
   return { mode, live_count: liveCount, imports: imports.map(presentImport) };
 }
 
-async function importClient(clientId, file, { confirmSwitch = false } = {}, ctx) {
+async function importClient(clientId, file, { confirmSwitch = false, name } = {}, ctx) {
   const tenantId = ctx.tenantId;
   await loadClient(tenantId, clientId, ctx);
 
@@ -564,20 +603,23 @@ async function importClient(clientId, file, { confirmSwitch = false } = {}, ctx)
     await sequelize.transaction((t) => wipeLiveForClient(tenantId, clientId, t));
   }
 
-  const conv = await ingestExport({
+  const conv = await createImportConversation({
     tenantId,
     externalThreadId: clientThreadId(clientId),
     clientId,
     projectId: null,
     parsed,
     fileName: file.originalname,
-    ctx,
+    name,
   });
+
+  // Processamento pesado em segundo plano (não bloqueia a resposta).
+  processImport({ conv, parsed, clientId, projectId: null, ctx }).catch(() => {});
 
   return {
     conversation: presentImport(conv),
     messages: conv.message_count,
-    stats: conv._importStats || null,
+    status: "processing",
   };
 }
 
@@ -613,7 +655,7 @@ async function getProjectMode(projectId, ctx) {
   return { mode, live_count: liveCount, imports: imports.map(presentImport) };
 }
 
-async function importProject(projectId, file, { confirmSwitch = false } = {}, ctx) {
+async function importProject(projectId, file, { confirmSwitch = false, name } = {}, ctx) {
   const tenantId = ctx.tenantId;
   const project = await loadProject(tenantId, projectId, ctx);
 
@@ -632,20 +674,22 @@ async function importProject(projectId, file, { confirmSwitch = false } = {}, ct
     await sequelize.transaction((t) => wipeLiveForProject(tenantId, projectId, t));
   }
 
-  const conv = await ingestExport({
+  const conv = await createImportConversation({
     tenantId,
     externalThreadId: projectThreadId(projectId, parsed.threadKey),
     clientId: project.client_id || null,
     projectId,
     parsed,
     fileName: file.originalname,
-    ctx,
+    name,
   });
+
+  processImport({ conv, parsed, clientId: project.client_id || null, projectId, ctx }).catch(() => {});
 
   return {
     conversation: presentImport(conv),
     messages: conv.message_count,
-    stats: conv._importStats || null,
+    status: "processing",
   };
 }
 
