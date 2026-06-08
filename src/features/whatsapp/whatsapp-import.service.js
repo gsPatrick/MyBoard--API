@@ -397,6 +397,8 @@ async function runAiExtraction({ text, clientId, projectId, ctx }) {
       role: ctx.role,
       // Importação por cliente não cria projeto (evita duplicar a cada reimport).
       skipProjectCreate: !projectId,
+      // Nunca sobrescreve o que já existe — só completa o vazio e adiciona o novo.
+      fillEmptyOnly: true,
     });
   } catch (error) {
     // eslint-disable-next-line no-console

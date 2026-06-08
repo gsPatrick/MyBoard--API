@@ -157,6 +157,87 @@ Regras:
 - REUNIÕES: quando houver combinação de reunião/call/encontro com data/hora, gere um item em "meetings" com título e "datetime" no formato YYYY-MM-DDTHH:mm (use null se a data não estiver clara). Coloque o contexto em "notes".
 - Não duplique itens. Responda em português. Retorne apenas o JSON.`;
 
+// Function calling: força a IA a devolver os dados estruturados de forma confiável.
+const EXTRACT_TOOL = {
+  type: "function",
+  function: {
+    name: "extract_crm_data",
+    description:
+      "Preenche TODOS os campos possíveis do cliente e do projeto a partir do conteúdo (conversa, documentos, transcrições). Não invente; use null quando não houver.",
+    parameters: {
+      type: "object",
+      properties: {
+        client: {
+          type: "object",
+          properties: {
+            name: { type: ["string", "null"] },
+            email: { type: ["string", "null"] },
+            company: { type: ["string", "null"] },
+            phone: { type: ["string", "null"] },
+            cpf: { type: ["string", "null"] },
+            cnpj: { type: ["string", "null"] },
+            notes: { type: ["string", "null"] },
+          },
+        },
+        project: {
+          type: "object",
+          properties: {
+            name: { type: ["string", "null"] },
+            description: { type: ["string", "null"] },
+            status: { type: ["string", "null"], enum: ["draft", "in_progress", "completed", "cancelled", "paused", null] },
+            priority: { type: ["string", "null"], enum: ["low", "medium", "high", "critical", null] },
+            budget: { type: ["number", "null"] },
+            due_date: { type: ["string", "null"] },
+            origin: { type: ["string", "null"], enum: ["own", "99freelas", "workana", null] },
+          },
+        },
+        details: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              category: {
+                type: "string",
+                enum: ["github", "credentials", "scope", "deployment", "environment", "documentation", "links", "notes", "custom"],
+              },
+              label: { type: "string" },
+              value: { type: "string" },
+              is_secret: { type: "boolean" },
+            },
+            required: ["label", "value"],
+          },
+        },
+        demands: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              description: { type: ["string", "null"] },
+              status: { type: ["string", "null"], enum: ["pending", "in_progress", "done", null] },
+            },
+            required: ["title"],
+          },
+        },
+        meetings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              datetime: { type: ["string", "null"] },
+              notes: { type: ["string", "null"] },
+            },
+            required: ["title"],
+          },
+        },
+        summary: { type: "string" },
+      },
+      required: ["details", "demands", "meetings"],
+    },
+  },
+};
+
 function parseJsonLoose(content) {
   if (!content) return null;
   let text = String(content).trim();
@@ -329,13 +410,30 @@ async function analyzeText({ text, tenantId, maxChars = 60000 }) {
   try {
     const completion = await aiRuntime.createChatCompletion(tenantId, {
       messages: [
-        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        {
+          role: "system",
+          content: `${EXTRACTION_SYSTEM_PROMPT}\n\nChame a função extract_crm_data preenchendo o máximo de campos possível.`,
+        },
         { role: "user", content: clean.slice(0, maxChars) },
       ],
+      tools: [EXTRACT_TOOL],
       temperature: 0.1,
       max_tokens: 2600,
     });
-    return normalizeProposal(parseJsonLoose(completion.content));
+
+    // Preferência: argumentos da função (function calling). Fallback: JSON no texto.
+    let raw = null;
+    const call = (completion.tool_calls || []).find((c) => c.function?.name === "extract_crm_data");
+    if (call?.function?.arguments) {
+      try {
+        raw = JSON.parse(call.function.arguments);
+      } catch {
+        raw = parseJsonLoose(call.function.arguments);
+      }
+    }
+    if (!raw) raw = parseJsonLoose(completion.content);
+
+    return normalizeProposal(raw);
   } catch (error) {
     throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
   }
@@ -355,28 +453,8 @@ async function analyze({ files = [], tenantId }) {
     );
   }
 
-  if (!(await aiRuntime.isConfiguredForTenant(tenantId))) {
-    throw new AppError(
-      "IA não configurada. Configure em Configurações → IA para usar a importação inteligente.",
-      400,
-      "AI_NOT_CONFIGURED"
-    );
-  }
-
-  let proposal;
-  try {
-    const completion = await aiRuntime.createChatCompletion(tenantId, {
-      messages: [
-        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-        { role: "user", content: text },
-      ],
-      temperature: 0.1,
-      max_tokens: 2200,
-    });
-    proposal = normalizeProposal(parseJsonLoose(completion.content));
-  } catch (error) {
-    throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
-  }
+  // Mesmo caminho de function calling usado pela importação do WhatsApp.
+  const proposal = await analyzeText({ text, tenantId, maxChars: 120000 });
 
   return {
     proposal,
@@ -412,6 +490,20 @@ function projectPayload(project) {
   return payload;
 }
 
+function isEmptyValue(v) {
+  return v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+}
+
+// Mantém só os campos que estão VAZIOS no registro atual (não sobrescreve o existente).
+function onlyEmptyFields(payload, current) {
+  if (!current) return payload;
+  const out = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (isEmptyValue(current[k])) out[k] = v;
+  }
+  return out;
+}
+
 async function findExistingClient(tenantId, client) {
   if (!client) return null;
   const or = [];
@@ -424,7 +516,16 @@ async function findExistingClient(tenantId, client) {
   return Client.findOne({ where: { tenant_id: tenantId, [Op.or]: or } });
 }
 
-async function apply({ proposal, target = {}, files = [], tenantId, userId, role, skipProjectCreate = false }) {
+async function apply({
+  proposal,
+  target = {},
+  files = [],
+  tenantId,
+  userId,
+  role,
+  skipProjectCreate = false,
+  fillEmptyOnly = false,
+}) {
   const ctx = { tenantId, userId, role };
   const safe = normalizeProposal(proposal);
 
@@ -437,12 +538,17 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
     projectId = project.id;
     clientId = project.client_id;
 
-    const pPayload = projectPayload(safe.project);
+    let pPayload = projectPayload(safe.project);
+    if (fillEmptyOnly) pPayload = onlyEmptyFields(pPayload, project);
     if (Object.keys(pPayload).length) {
       await projectsService.updateProject(projectId, pPayload, ctx);
       actions.project = "updated";
     }
-    const cPayload = clientPayload(safe.client);
+    let cPayload = clientPayload(safe.client);
+    if (fillEmptyOnly && clientId) {
+      const currentClient = await Client.findByPk(clientId);
+      cPayload = onlyEmptyFields(cPayload, currentClient);
+    }
     if (Object.keys(cPayload).length) {
       await clientsService.updateClient(clientId, cPayload, ctx);
       actions.client = "updated";
@@ -454,7 +560,8 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
     }
     clientId = client.id;
 
-    const cPayload = clientPayload(safe.client);
+    let cPayload = clientPayload(safe.client);
+    if (fillEmptyOnly) cPayload = onlyEmptyFields(cPayload, client);
     if (Object.keys(cPayload).length) {
       await clientsService.updateClient(clientId, cPayload, ctx);
       actions.client = "updated";
@@ -501,9 +608,31 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
 
   // Detalhes/credenciais (somente quando há projeto — ProjectDetail pertence a projeto)
   if (projectId && safe.details.length) {
+    // Modo não-sobrescrever: não toca em detalhes que já existem (mesma key/label).
+    let existingKeys = new Set();
+    let existingLabels = new Set();
+    if (fillEmptyOnly) {
+      try {
+        const existing = await projectDetailsService.listDetails(projectId, {}, ctx);
+        const arr = Array.isArray(existing) ? existing : existing?.items || [];
+        existingKeys = new Set(arr.map((d) => String(d.key || "").toLowerCase()));
+        existingLabels = new Set(arr.map((d) => String(d.label || "").trim().toLowerCase()));
+      } catch {
+        /* segue sem dedup */
+      }
+    }
     for (const detail of safe.details) {
+      if (
+        fillEmptyOnly &&
+        (existingKeys.has(String(detail.key || "").toLowerCase()) ||
+          existingLabels.has(String(detail.label || "").trim().toLowerCase()))
+      ) {
+        continue; // já existe → mantém o que está
+      }
       try {
         await projectDetailsService.upsertDetailByKey(projectId, detail, ctx);
+        existingKeys.add(String(detail.key || "").toLowerCase());
+        existingLabels.add(String(detail.label || "").trim().toLowerCase());
         actions.details += 1;
       } catch (error) {
         console.warn("[ingestion] detalhe falhou:", error.message);
