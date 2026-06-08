@@ -10,6 +10,7 @@
     "migrate:undo": "sequelize-cli db:migrate:undo",
     "migrate:status": "sequelize-cli db:migrate:status",
     "db:create": "node scripts/create-database.js",
+    "db:reset": "node scripts/reset-db.js && sequelize-cli db:migrate && node scripts/seed-admin.js",
     "seed:admin": "node scripts/seed-admin.js",
     "smoke:test": "node scripts/smoke-test.js"
   },
