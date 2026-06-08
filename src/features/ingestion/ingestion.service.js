@@ -7,6 +7,8 @@ const aiRuntime = require("../settings/ai-runtime.service");
 const clientsService = require("../clients/clients.service");
 const projectsService = require("../projects/projects.service");
 const projectDetailsService = require("../project-details/project-details.service");
+const projectDemandsService = require("../project-demands/project-demands.service");
+const agendaService = require("../agenda/agenda.service");
 const mediaService = require("../media/media.service");
 const factExtraction = require("../../rag/fact-extraction.service");
 const {
@@ -14,6 +16,7 @@ const {
   PROJECT_ORIGINS,
   PROJECT_PRIORITIES,
   DETAIL_CATEGORIES,
+  DEMAND_STATUSES,
 } = require("../../config/constants");
 
 const MAX_CHARS = 60000;
@@ -134,6 +137,12 @@ Schema (use exatamente estas chaves; use null quando não houver informação �
     { "category": "github"|"credentials"|"scope"|"deployment"|"environment"|"documentation"|"links"|"notes"|"custom",
       "label": string, "value": string, "is_secret": boolean }
   ],
+  "demands": [
+    { "title": string, "description": string|null, "status": "pending"|"in_progress"|"done"|null }
+  ],
+  "meetings": [
+    { "title": string, "datetime": "YYYY-MM-DDTHH:mm"|null, "notes": string|null }
+  ],
   "summary": string
 }
 
@@ -144,6 +153,8 @@ Regras:
 - SEPARE bem por category: tecnologias/stack → "environment" (label "Stack" ou "Tecnologias"); URLs e links → "links"; passos/instruções de deploy → "deployment"; escopo/requisitos → "scope"; documentação → "documentation"; o resto → "custom". Não jogue tudo em "custom".
 - Marque is_secret=true e category="credentials" para qualquer segredo (senha, token, chave, secret, login com senha, connection string).
 - "label" é um rótulo curto legível (ex.: "Senha do banco", "Repositório GitHub", "URL de produção", "Stack"). "value" é o valor literal encontrado.
+- DEMANDAS/TAREFAS: quando o conteúdo (especialmente conversas) descrever algo que precisa ser FEITO, ajustes pedidos, bugs, pendências ou próximos passos, gere um item em "demands" com um título curto e acionável e uma descrição. Não invente; só o que estiver no texto.
+- REUNIÕES: quando houver combinação de reunião/call/encontro com data/hora, gere um item em "meetings" com título e "datetime" no formato YYYY-MM-DDTHH:mm (use null se a data não estiver clara). Coloque o contexto em "notes".
 - Não duplique itens. Responda em português. Retorne apenas o JSON.`;
 
 function parseJsonLoose(content) {
@@ -241,14 +252,93 @@ function normalizeDetails(raw) {
   return details;
 }
 
+function normalizeDemands(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const demands = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const title = cleanString(item.title, 300);
+    if (!title) continue;
+    const key = title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const status = DEMAND_STATUSES.includes(item.status) ? item.status : "pending";
+    demands.push({
+      title,
+      description: cleanString(item.description, 4000),
+      status,
+    });
+    if (demands.length >= 40) break;
+  }
+  return demands;
+}
+
+function normalizeMeetings(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const meetings = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const title = cleanString(item.title, 300);
+    if (!title) continue;
+    const datetime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(item.datetime || "")
+      ? item.datetime.slice(0, 16)
+      : null;
+    const key = `${title.toLowerCase()}|${datetime || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    meetings.push({ title, datetime, notes: cleanString(item.notes, 2000) });
+    if (meetings.length >= 20) break;
+  }
+  return meetings;
+}
+
 function normalizeProposal(raw) {
   const safe = raw && typeof raw === "object" ? raw : {};
   return {
     client: normalizeClient(safe.client),
     project: normalizeProject(safe.project),
     details: normalizeDetails(safe.details),
+    demands: normalizeDemands(safe.demands),
+    meetings: normalizeMeetings(safe.meetings),
     summary: cleanString(safe.summary, 4000) || "",
   };
+}
+
+// Roda a extração estruturada sobre um texto já pronto (reusado pela
+// importação de conversas do WhatsApp). Limita o tamanho para não estourar o contexto.
+async function analyzeText({ text, tenantId, maxChars = 60000 }) {
+  const clean = String(text || "").trim();
+  if (!clean) {
+    throw new AppError(
+      "Não consegui ler texto para analisar.",
+      422,
+      "NO_TEXT_EXTRACTED"
+    );
+  }
+
+  if (!(await aiRuntime.isConfiguredForTenant(tenantId))) {
+    throw new AppError(
+      "IA não configurada. Configure em Configurações → IA para usar a importação inteligente.",
+      400,
+      "AI_NOT_CONFIGURED"
+    );
+  }
+
+  try {
+    const completion = await aiRuntime.createChatCompletion(tenantId, {
+      messages: [
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "user", content: clean.slice(0, maxChars) },
+      ],
+      temperature: 0.1,
+      max_tokens: 2600,
+    });
+    return normalizeProposal(parseJsonLoose(completion.content));
+  } catch (error) {
+    throw new AppError(`Falha ao analisar com a IA: ${error.message}`, 502, "AI_EXTRACTION_FAILED");
+  }
 }
 
 async function analyze({ files = [], tenantId }) {
@@ -334,13 +424,13 @@ async function findExistingClient(tenantId, client) {
   return Client.findOne({ where: { tenant_id: tenantId, [Op.or]: or } });
 }
 
-async function apply({ proposal, target = {}, files = [], tenantId, userId, role }) {
+async function apply({ proposal, target = {}, files = [], tenantId, userId, role, skipProjectCreate = false }) {
   const ctx = { tenantId, userId, role };
   const safe = normalizeProposal(proposal);
 
   let clientId = null;
   let projectId = null;
-  const actions = { client: null, project: null, details: 0, files: 0 };
+  const actions = { client: null, project: null, details: 0, demands: 0, meetings: 0, files: 0 };
 
   if (target.project_id) {
     const project = await projectsService.getProjectById(target.project_id, {}, ctx);
@@ -369,7 +459,7 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
       await clientsService.updateClient(clientId, cPayload, ctx);
       actions.client = "updated";
     }
-    if (safe.project?.name) {
+    if (!skipProjectCreate && safe.project?.name) {
       const created = await projectsService.createProject(
         { ...projectPayload(safe.project), client_id: clientId },
         ctx
@@ -421,6 +511,51 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
     }
   }
 
+  // Demandas/tarefas extraídas (pertencem a projeto) — dedup por título p/ reimport.
+  if (projectId && safe.demands?.length) {
+    let existingTitles = new Set();
+    try {
+      const existing = await projectDemandsService.listDemands(projectId, {}, ctx);
+      const arr = Array.isArray(existing) ? existing : existing?.items || [];
+      existingTitles = new Set(arr.map((d) => String(d.title || "").trim().toLowerCase()));
+    } catch {
+      /* segue sem dedup */
+    }
+    for (const demand of safe.demands) {
+      const key = demand.title.trim().toLowerCase();
+      if (existingTitles.has(key)) continue;
+      try {
+        await projectDemandsService.createDemand(projectId, demand, ctx);
+        existingTitles.add(key);
+        actions.demands += 1;
+      } catch (error) {
+        console.warn("[ingestion] demanda falhou:", error.message);
+      }
+    }
+  }
+
+  // Reuniões com data viram eventos na agenda
+  if (safe.meetings?.length) {
+    for (const meeting of safe.meetings) {
+      if (!meeting.datetime) continue;
+      try {
+        await agendaService.createEvent(
+          {
+            title: meeting.title,
+            starts_at: meeting.datetime,
+            description: meeting.notes || null,
+            project_id: projectId || null,
+            client_id: clientId || null,
+          },
+          ctx
+        );
+        actions.meetings += 1;
+      } catch (error) {
+        console.warn("[ingestion] reunião falhou:", error.message);
+      }
+    }
+  }
+
   // Anexa os arquivos originais à entidade resultante.
   const attachType = projectId ? "project" : "client";
   const attachId = projectId || clientId;
@@ -457,6 +592,7 @@ async function apply({ proposal, target = {}, files = [], tenantId, userId, role
 
 module.exports = {
   analyze,
+  analyzeText,
   apply,
   extractTextFromFile,
   extractTextFromFiles,

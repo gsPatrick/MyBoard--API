@@ -1,7 +1,7 @@
 const fs = require("fs/promises");
 const path = require("path");
 const { randomUUID } = require("crypto");
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 const { RagMessageAsset, MediaFile } = require("../models");
 const localStorage = require("../providers/storage/local-storage.provider");
 const { estimateTokens } = require("./token-estimate");
@@ -68,12 +68,24 @@ async function downloadBuffer({ url, base64 }) {
 }
 
 async function extractPdfText(buffer) {
+  // pdf-parse v2: classe PDFParse (a versão antiga era função default).
+  let parser = null;
   try {
-    const parsed = await pdfParse(buffer);
-    return String(parsed.text || "").replace(/\s+/g, " ").trim();
+    parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    return String(result?.text || "")
+      .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   } catch (error) {
     console.warn("[RAG] PDF parse falhou:", error.message);
     return null;
+  } finally {
+    try {
+      await parser?.destroy();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -247,4 +259,8 @@ module.exports = {
   extractMediaFromEvolutionMessage,
   processMessageMedia,
   isContractFile,
+  // helpers reutilizados pela importação de conversas exportadas
+  extractPdfText,
+  transcribeAudio,
+  saveBufferAsMedia,
 };

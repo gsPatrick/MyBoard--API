@@ -18,7 +18,38 @@ const { estimateTokens } = require("../../rag/token-estimate");
 const { hashContent } = require("../../rag/content-hash");
 const factExtraction = require("../../rag/fact-extraction.service");
 const ingestService = require("../../rag/ingest.service");
+const mediaProcessor = require("../../rag/media-processor.service");
+const ingestionService = require("../ingestion/ingestion.service");
 const parser = require("./whatsapp-export-parser");
+
+const MIME_BY_EXT = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  csv: "text/csv",
+  txt: "text/plain",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  opus: "audio/ogg",
+  ogg: "audio/ogg",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  vcf: "text/vcard",
+};
+function mimeFromName(name = "") {
+  const ext = String(name).split(".").pop().toLowerCase();
+  return MIME_BY_EXT[ext] || "application/octet-stream";
+}
+
+const ATTACH_MAX = Number(process.env.WHATSAPP_IMPORT_MAX_ATTACHMENTS || 40);
+const ATTACH_MAX_BYTES = Number(process.env.WHATSAPP_IMPORT_ATTACHMENT_MAX_MB || 20) * 1024 * 1024;
 
 const IMPORT_SOURCE = "import";
 
@@ -125,6 +156,13 @@ async function wipeLiveForProject(tenantId, projectId, transaction) {
   return convs.length;
 }
 
+/** Corpo final da mensagem para RAG: placeholder de mídia + texto extraído/transcrito. */
+function fullBody(m) {
+  let body = m.contentType !== "text" ? mediaLabel(m) : m.bodyText;
+  if (m.extractedText) body = `${body}\n${m.extractedText}`.trim();
+  return body;
+}
+
 /** Transforma mensagens do parser em linhas de RagMessage. */
 function buildMessageRows(tenantId, conversationId, messages) {
   let lastDate = null;
@@ -137,7 +175,7 @@ function buildMessageRows(tenantId, conversationId, messages) {
     const sentAt = m.sentAt || lastDate || new Date();
     lastDate = sentAt;
 
-    let body = m.contentType !== "text" ? mediaLabel(m) : m.bodyText;
+    const body = fullBody(m);
     const normalized = String(body || "").replace(/\s+/g, " ").trim();
     if (!normalized) continue;
 
@@ -170,7 +208,7 @@ function buildMessageRows(tenantId, conversationId, messages) {
 async function extractFactsBatched({ tenantId, clientId, projectId, conversationId, messages }) {
   const text = messages
     .filter((m) => !m.isSystem)
-    .map((m) => `${m.senderName || "?"}: ${m.contentType !== "text" ? mediaLabel(m) : m.bodyText}`)
+    .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
     .join("\n");
   if (!text.trim()) return;
 
@@ -197,11 +235,107 @@ async function extractFactsBatched({ tenantId, clientId, projectId, conversation
   }
 }
 
+/**
+ * Processa os anexos do zip: salva como MediaFile (para download), extrai texto
+ * de documentos/PDF e transcreve áudios, enriquecendo o transcript p/ o RAG.
+ */
+async function processAttachments({ tenantId, parsed, clientId, projectId }) {
+  const entityType = projectId ? "project" : "client";
+  const entityId = projectId || clientId;
+  if (!entityId || !parsed.attachments?.size) return { saved: 0, transcribed: 0 };
+
+  let processed = 0;
+  let saved = 0;
+  let transcribed = 0;
+
+  for (const m of parsed.messages) {
+    if (!m.attachmentName || processed >= ATTACH_MAX) continue;
+    const entry = parsed.attachments.get(m.attachmentName);
+    if (!entry) continue;
+
+    let buffer;
+    try {
+      buffer = await entry.async("nodebuffer");
+    } catch {
+      continue;
+    }
+    if (!buffer || !buffer.length || buffer.length > ATTACH_MAX_BYTES) continue;
+    processed += 1;
+
+    const mimeType = mimeFromName(m.attachmentName);
+    let extracted = "";
+
+    try {
+      if (/\.pdf$/i.test(m.attachmentName)) {
+        extracted = (await mediaProcessor.extractPdfText(buffer)) || "";
+      } else if (/\.(txt|csv|md|json)$/i.test(m.attachmentName)) {
+        extracted = buffer.toString("utf8").slice(0, 20000);
+      } else if (m.contentType === "audio") {
+        extracted = (await mediaProcessor.transcribeAudio(buffer, mimeType, m.attachmentName, tenantId)) || "";
+        if (extracted && !/transcrição (indisponível|pendente|disponível)/i.test(extracted)) transcribed += 1;
+      }
+    } catch {
+      /* extração best-effort */
+    }
+
+    if (extracted) {
+      m.extractedText = extracted;
+    }
+
+    // Salva o arquivo para o usuário acessar/baixar (anexo do projeto/cliente).
+    try {
+      await mediaProcessor.saveBufferAsMedia({
+        buffer,
+        fileName: m.attachmentName,
+        mimeType,
+        entityType,
+        entityId,
+      });
+      saved += 1;
+    } catch {
+      /* não bloqueia a importação */
+    }
+  }
+
+  return { saved, transcribed };
+}
+
+/** Roda a extração estruturada por IA e aplica nos lugares certos (detalhes/demandas/reuniões). */
+async function runAiExtraction({ parsed, clientId, projectId, ctx }) {
+  try {
+    const transcript = parsed.messages
+      .filter((m) => !m.isSystem)
+      .map((m) => `${m.senderName || "?"}: ${fullBody(m)}`)
+      .join("\n");
+    if (!transcript.trim()) return null;
+
+    const proposal = await ingestionService.analyzeText({ text: transcript, tenantId: ctx.tenantId });
+    const target = projectId ? { project_id: projectId } : { client_id: clientId };
+    return await ingestionService.apply({
+      proposal,
+      target,
+      files: [],
+      tenantId: ctx.tenantId,
+      userId: ctx.userId,
+      role: ctx.role,
+      // Importação por cliente não cria projeto (evita duplicar a cada reimport).
+      skipProjectCreate: !projectId,
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("[whatsapp-import] extração IA falhou:", error.message);
+    return null;
+  }
+}
+
 /** Cria a conversa importada (substituindo a anterior de mesma chave) e indexa o RAG. */
-async function ingestExport({ tenantId, externalThreadId, clientId, projectId, parsed, fileName }) {
+async function ingestExport({ tenantId, externalThreadId, clientId, projectId, parsed, fileName, ctx }) {
   if (!parsed.messages.length) {
     throw new AppError("Não encontrei mensagens nesse arquivo de conversa.", 400, "EMPTY_EXPORT");
   }
+
+  // Anexos: salva para download + extrai texto/transcreve (enriquece o transcript).
+  const media = await processAttachments({ tenantId, parsed, clientId, projectId });
 
   const conv = await sequelize.transaction(async (t) => {
     const existing = await RagConversation.findOne({
@@ -253,6 +387,14 @@ async function ingestExport({ tenantId, externalThreadId, clientId, projectId, p
     messages: parsed.messages,
   });
 
+  // IA: extrai e organiza nos lugares certos (descrição, credenciais, github,
+  // servidor, demandas, reuniões). Best-effort — não derruba a importação.
+  let aiResult = null;
+  if (ctx) {
+    aiResult = await runAiExtraction({ parsed, clientId, projectId, ctx });
+  }
+
+  conv._importStats = { media, ai: aiResult?.actions || null };
   return conv;
 }
 
@@ -339,9 +481,14 @@ async function importClient(clientId, file, { confirmSwitch = false } = {}, ctx)
     projectId: null,
     parsed,
     fileName: file.originalname,
+    ctx,
   });
 
-  return { conversation: presentImport(conv), messages: conv.message_count };
+  return {
+    conversation: presentImport(conv),
+    messages: conv.message_count,
+    stats: conv._importStats || null,
+  };
 }
 
 async function removeClientImport(clientId, conversationId, ctx) {
@@ -402,9 +549,14 @@ async function importProject(projectId, file, { confirmSwitch = false } = {}, ct
     projectId,
     parsed,
     fileName: file.originalname,
+    ctx,
   });
 
-  return { conversation: presentImport(conv), messages: conv.message_count };
+  return {
+    conversation: presentImport(conv),
+    messages: conv.message_count,
+    stats: conv._importStats || null,
+  };
 }
 
 async function removeProjectImport(projectId, conversationId, ctx) {
