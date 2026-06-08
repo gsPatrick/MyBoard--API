@@ -48,7 +48,7 @@ module.exports = {
 
   USER_ROLES: ["super_admin", "admin", "developer", "viewer"],
 
-  ONBOARDING_VERSION: 2,
+  ONBOARDING_VERSION: 3,
   ONBOARDING_STATUSES: ["pending", "in_progress", "completed", "skipped"],
 
   AGENDA_STATUSES: ["scheduled", "completed", "cancelled"],
