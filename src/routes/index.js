@@ -19,6 +19,7 @@ const bordieRoutes = require("../features/bordie/bordie.routes");
 const settingsRoutes = require("../features/settings/settings.routes");
 const ingestionRoutes = require("../features/ingestion/ingestion.routes");
 const documentsRoutes = require("../features/documents/documents.routes");
+const chatsRoutes = require("../features/chats/chats.routes");
 const { APP_TIMEZONE } = require("../config/constants");
 
 const router = Router();
@@ -56,5 +57,6 @@ router.use("/v1/bordie", bordieRoutes);
 router.use("/v1/settings", settingsRoutes);
 router.use("/v1/ingestion", ingestionRoutes);
 router.use("/v1/documents", documentsRoutes);
+router.use("/v1/chats", chatsRoutes);
 
 module.exports = router;
