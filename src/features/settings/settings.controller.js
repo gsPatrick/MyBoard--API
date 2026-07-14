@@ -21,6 +21,12 @@ const updatePrivacy = catchAsync(async (req, res) => {
   return sendSuccess(res, data);
 });
 
+const updateIngestion = catchAsync(async (req, res) => {
+  const ctx = buildServiceContext(req);
+  const data = await settingsService.updateIngestionSettings(req.body || {}, ctx);
+  return sendSuccess(res, data);
+});
+
 const testAi = catchAsync(async (req, res) => {
   const ctx = buildServiceContext(req);
   const data = await settingsService.testAiConnection(ctx);
@@ -37,6 +43,7 @@ module.exports = {
   getSettings,
   updateAi,
   updatePrivacy,
+  updateIngestion,
   testAi,
   listAiModels,
 };

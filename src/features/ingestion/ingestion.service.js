@@ -1,7 +1,7 @@
 const { Op } = require("sequelize");
 const { PDFParse } = require("pdf-parse");
 const JSZip = require("jszip");
-const { Client } = require("../../models");
+const { Client, Tenant } = require("../../models");
 const AppError = require("../../utils/app-error");
 const aiRuntime = require("../settings/ai-runtime.service");
 const clientsService = require("../clients/clients.service");
@@ -560,6 +560,10 @@ async function apply({
   const ctx = { tenantId, userId, role };
   const safe = normalizeProposal(proposal);
 
+  const tenant = await Tenant.findByPk(tenantId);
+  const settings = tenant?.settings || {};
+  const ingestionSettings = settings.ingestion || {};
+
   let clientId = null;
   let projectId = null;
   const actions = { client: null, project: null, details: 0, demands: 0, meetings: 0, files: 0 };
@@ -569,20 +573,24 @@ async function apply({
     projectId = project.id;
     clientId = project.client_id;
 
-    let pPayload = projectPayload(safe.project);
-    if (fillEmptyOnly) pPayload = onlyEmptyFields(pPayload, project);
-    if (Object.keys(pPayload).length) {
-      await projectsService.updateProject(projectId, pPayload, ctx);
-      actions.project = "updated";
+    if (ingestionSettings.create_project !== false) {
+      let pPayload = projectPayload(safe.project);
+      if (fillEmptyOnly) pPayload = onlyEmptyFields(pPayload, project);
+      if (Object.keys(pPayload).length) {
+        await projectsService.updateProject(projectId, pPayload, ctx);
+        actions.project = "updated";
+      }
     }
-    let cPayload = clientPayload(safe.client);
-    if (fillEmptyOnly && clientId) {
-      const currentClient = await Client.findByPk(clientId);
-      cPayload = onlyEmptyFields(cPayload, currentClient);
-    }
-    if (Object.keys(cPayload).length) {
-      await clientsService.updateClient(clientId, cPayload, ctx);
-      actions.client = "updated";
+    if (clientId && ingestionSettings.create_client !== false) {
+      let cPayload = clientPayload(safe.client);
+      if (fillEmptyOnly) {
+        const currentClient = await Client.findByPk(clientId);
+        cPayload = onlyEmptyFields(cPayload, currentClient);
+      }
+      if (Object.keys(cPayload).length) {
+        await clientsService.updateClient(clientId, cPayload, ctx);
+        actions.client = "updated";
+      }
     }
   } else if (target.client_id) {
     const client = await Client.findByPk(target.client_id);
@@ -591,13 +599,15 @@ async function apply({
     }
     clientId = client.id;
 
-    let cPayload = clientPayload(safe.client);
-    if (fillEmptyOnly) cPayload = onlyEmptyFields(cPayload, client);
-    if (Object.keys(cPayload).length) {
-      await clientsService.updateClient(clientId, cPayload, ctx);
-      actions.client = "updated";
+    if (ingestionSettings.create_client !== false) {
+      let cPayload = clientPayload(safe.client);
+      if (fillEmptyOnly) cPayload = onlyEmptyFields(cPayload, client);
+      if (Object.keys(cPayload).length) {
+        await clientsService.updateClient(clientId, cPayload, ctx);
+        actions.client = "updated";
+      }
     }
-    if (!skipProjectCreate && safe.project?.name) {
+    if (!skipProjectCreate && safe.project?.name && ingestionSettings.create_project !== false) {
       const created = await projectsService.createProject(
         { ...projectPayload(safe.project), client_id: clientId },
         ctx
@@ -610,15 +620,25 @@ async function apply({
     const existing = await findExistingClient(tenantId, safe.client);
     if (existing) {
       clientId = existing.id;
-      const cPayload = clientPayload(safe.client);
-      if (Object.keys(cPayload).length) {
-        await clientsService.updateClient(clientId, cPayload, ctx);
+      if (ingestionSettings.create_client !== false) {
+        const cPayload = clientPayload(safe.client);
+        if (Object.keys(cPayload).length) {
+          await clientsService.updateClient(clientId, cPayload, ctx);
+        }
+        actions.client = "updated";
       }
-      actions.client = "updated";
     } else if (safe.client?.name) {
-      const created = await clientsService.createClient(clientPayload(safe.client), ctx);
-      clientId = created.id;
-      actions.client = "created";
+      if (ingestionSettings.create_client !== false) {
+        const created = await clientsService.createClient(clientPayload(safe.client), ctx);
+        clientId = created.id;
+        actions.client = "created";
+      } else {
+        throw new AppError(
+          "Não é possível realizar a importação: a criação de clientes está desativada em Configurações e nenhum cliente correspondente foi encontrado.",
+          422,
+          "CLIENT_CREATION_DISABLED"
+        );
+      }
     } else {
       throw new AppError(
         "Não foi possível identificar um cliente nos arquivos. Revise os dados antes de aplicar.",
@@ -627,7 +647,7 @@ async function apply({
       );
     }
 
-    if (safe.project?.name) {
+    if (safe.project?.name && ingestionSettings.create_project !== false) {
       const created = await projectsService.createProject(
         { ...projectPayload(safe.project), client_id: clientId },
         ctx
@@ -638,7 +658,7 @@ async function apply({
   }
 
   // Detalhes/credenciais (somente quando há projeto — ProjectDetail pertence a projeto)
-  if (projectId && safe.details.length) {
+  if (projectId && safe.details.length && ingestionSettings.create_details !== false) {
     // Modo não-sobrescrever: não toca em detalhes que já existem (mesma key/label).
     let existingKeys = new Set();
     let existingLabels = new Set();
@@ -672,7 +692,7 @@ async function apply({
   }
 
   // Demandas/tarefas extraídas (pertencem a projeto) — dedup por título p/ reimport.
-  if (projectId && safe.demands?.length) {
+  if (projectId && safe.demands?.length && ingestionSettings.create_demands !== false) {
     let existingTitles = new Set();
     try {
       const existing = await projectDemandsService.listDemands(projectId, {}, ctx);
@@ -695,7 +715,7 @@ async function apply({
   }
 
   // Reuniões com data viram eventos na agenda
-  if (safe.meetings?.length) {
+  if (safe.meetings?.length && ingestionSettings.create_meetings !== false) {
     for (const meeting of safe.meetings) {
       if (!meeting.datetime) continue;
       try {

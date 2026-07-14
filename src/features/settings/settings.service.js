@@ -22,6 +22,15 @@ const DEFAULT_PRIVACY = {
   allow_ai_on_whatsapp: true,
 };
 
+const DEFAULT_INGESTION = {
+  create_client: true,
+  create_project: true,
+  create_details: true,
+  create_demands: true,
+  create_meetings: true,
+};
+
+
 function maskSecret(value) {
   if (!value || typeof value !== "string") return null;
   if (value.length <= 8) return "••••••••";
@@ -118,6 +127,10 @@ async function getWorkspaceSettings(ctx) {
     privacy: {
       ...DEFAULT_PRIVACY,
       ...(settings.privacy || {}),
+    },
+    ingestion: {
+      ...DEFAULT_INGESTION,
+      ...(settings.ingestion || {}),
     },
     bordie_policy: policy,
     whatsapp: {
@@ -245,6 +258,40 @@ async function updatePrivacySettings(payload, ctx) {
     bordie_policy: bordiePolicy,
   };
 }
+
+async function updateIngestionSettings(payload, ctx) {
+  const tenant = await getTenantForContext(ctx);
+  const currentIngestion = {
+    ...DEFAULT_INGESTION,
+    ...(tenant.settings?.ingestion || {}),
+  };
+
+  const ingestion = { ...currentIngestion };
+  if (payload.create_client !== undefined) {
+    ingestion.create_client = Boolean(payload.create_client);
+  }
+  if (payload.create_project !== undefined) {
+    ingestion.create_project = Boolean(payload.create_project);
+  }
+  if (payload.create_details !== undefined) {
+    ingestion.create_details = Boolean(payload.create_details);
+  }
+  if (payload.create_demands !== undefined) {
+    ingestion.create_demands = Boolean(payload.create_demands);
+  }
+  if (payload.create_meetings !== undefined) {
+    ingestion.create_meetings = Boolean(payload.create_meetings);
+  }
+
+  const settings = {
+    ...(tenant.settings || {}),
+    ingestion,
+  };
+
+  await tenant.update({ settings });
+  return ingestion;
+}
+
 
 async function testAiConnection(ctx) {
   const tenant = await getTenantForContext(ctx);
@@ -383,6 +430,7 @@ module.exports = {
   getWorkspaceSettings,
   updateAiSettings,
   updatePrivacySettings,
+  updateIngestionSettings,
   testAiConnection,
   listCustomProxyModels,
   resolveTenantAiConfig,
