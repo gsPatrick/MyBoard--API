@@ -88,6 +88,9 @@ async function resetUserByEmail(email) {
       if (sequelize.models.ProjectTag) {
         await sequelize.models.ProjectTag.destroy({ where: { project_id: projectIds } });
       }
+      if (sequelize.models.MediaFile) {
+        await sequelize.models.MediaFile.destroy({ where: { entity_type: "project", entity_id: projectIds } });
+      }
     }
 
     if (clientIds.length) {
@@ -97,6 +100,13 @@ async function resetUserByEmail(email) {
       if (sequelize.models.ClientTag) {
         await sequelize.models.ClientTag.destroy({ where: { client_id: clientIds } });
       }
+      if (sequelize.models.MediaFile) {
+        await sequelize.models.MediaFile.destroy({ where: { entity_type: "client", entity_id: clientIds } });
+      }
+    }
+
+    if (sequelize.models.MediaFile) {
+      await sequelize.models.MediaFile.destroy({ where: { uploaded_by_user_id: userId } });
     }
 
     const tenantModels = [
@@ -112,7 +122,6 @@ async function resetUserByEmail(email) {
       'RagConversation',
       'RagSummary',
       'WhatsappInstance',
-      'MediaFile',
       'Tag',
       'Project',
       'Client'
