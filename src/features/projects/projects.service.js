@@ -411,11 +411,14 @@ async function updateProject(id, payload, ctx) {
   if (recurrence) {
     Object.assign(updates, recurrence);
     // Mantém o status coerente ao ligar/desligar a recorrência
-    // (a menos que o próprio payload já esteja definindo o status).
+    // (a menos que o próprio payload já esteja definindo o status —
+    // caso de "recurring" vs "maintenance", que o front envia explícito).
     if (payload.status === undefined) {
-      if (recurrence.is_recurring && project.status !== "recurring") {
+      const hadRecurringStatus =
+        project.status === "recurring" || project.status === "maintenance";
+      if (recurrence.is_recurring && !hadRecurringStatus) {
         updates.status = "recurring";
-      } else if (!recurrence.is_recurring && project.status === "recurring") {
+      } else if (!recurrence.is_recurring && hadRecurringStatus) {
         updates.status = "in_progress";
       }
     }

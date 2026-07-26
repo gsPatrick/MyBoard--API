@@ -5,7 +5,15 @@ module.exports = {
   IMPORTANCE_LEVELS: ["normal", "important", "high", "critical", "vip"],
   TAG_SCOPES: ["client", "project", "both"],
 
-  PROJECT_STATUSES: ["draft", "in_progress", "completed", "cancelled", "paused", "recurring"],
+  PROJECT_STATUSES: [
+    "draft",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "paused",
+    "recurring",
+    "maintenance",
+  ],
   PROJECT_STATUS_LABELS: {
     draft: "Rascunho",
     in_progress: "Em andamento",
@@ -13,6 +21,7 @@ module.exports = {
     cancelled: "Cancelado",
     paused: "Pausado",
     recurring: "Recorrente",
+    maintenance: "Manutenção",
   },
   PROJECT_PRIORITIES: ["low", "medium", "high", "critical"],
   PROJECT_ORIGINS: ["own", "99freelas", "workana"],
