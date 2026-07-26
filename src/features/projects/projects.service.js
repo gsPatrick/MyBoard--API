@@ -9,6 +9,7 @@ const {
   PROJECT_ORIGINS,
   NOTIFICATION_EVENTS,
 } = require("../../config/constants");
+const { computeFirstRun, todayISO } = require("../../utils/recurrence");
 const projectDetailsService = require("../project-details/project-details.service");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
@@ -49,6 +50,93 @@ function resolveDeadline(payload, existing = {}) {
   }
 
   return { has_deadline: true, due_date: dueDate };
+}
+
+/**
+ * Normaliza e valida os campos de recorrência.
+ * - No create (`existing` null) sempre retorna um objeto.
+ * - No update retorna `null` quando o payload não mexe em recorrência.
+ * - Recalcula `recurrence_next_run` ao ligar a recorrência ou mudar dia/início.
+ */
+function resolveRecurrence(payload, existing = null) {
+  const has = (key) => payload[key] !== undefined;
+  const touched =
+    has("is_recurring") ||
+    has("recurrence_amount") ||
+    has("recurrence_day") ||
+    has("recurrence_start_date") ||
+    has("recurrence_end_date");
+
+  if (!touched && existing) return null;
+
+  const isRecurring = has("is_recurring")
+    ? Boolean(payload.is_recurring)
+    : Boolean(existing?.is_recurring);
+
+  if (!isRecurring) {
+    return {
+      is_recurring: false,
+      recurrence_amount: null,
+      recurrence_day: null,
+      recurrence_start_date: null,
+      recurrence_end_date: null,
+      recurrence_next_run: null,
+    };
+  }
+
+  const amountNum = Number(
+    has("recurrence_amount") ? payload.recurrence_amount : existing?.recurrence_amount
+  );
+  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    throw new AppError("Valor da recorrência deve ser maior que zero", 400, "VALIDATION_ERROR");
+  }
+
+  const day = Number(
+    has("recurrence_day") ? payload.recurrence_day : existing?.recurrence_day
+  );
+  if (!Number.isInteger(day) || day < 1 || day > 31) {
+    throw new AppError("Dia da recorrência deve ser entre 1 e 31", 400, "VALIDATION_ERROR");
+  }
+
+  const startDate =
+    (has("recurrence_start_date") ? payload.recurrence_start_date : existing?.recurrence_start_date) ||
+    todayISO();
+
+  const endDate = has("recurrence_end_date")
+    ? payload.recurrence_end_date || null
+    : existing?.recurrence_end_date || null;
+
+  if (endDate && String(endDate) < String(startDate)) {
+    throw new AppError(
+      "Data final da recorrência não pode ser anterior ao início",
+      400,
+      "VALIDATION_ERROR"
+    );
+  }
+
+  const wasRecurring = Boolean(existing?.is_recurring);
+  const dayChanged = has("recurrence_day") && Number(existing?.recurrence_day) !== day;
+  const startChanged =
+    has("recurrence_start_date") &&
+    String(existing?.recurrence_start_date || "") !== String(startDate);
+
+  let nextRun = existing?.recurrence_next_run || null;
+  if (!wasRecurring || dayChanged || startChanged || !nextRun) {
+    // Ancora em hoje (ou no início, se for futuro) para não gerar
+    // recebimentos retroativos ao ligar/editar a recorrência.
+    const today = todayISO();
+    const anchor = String(startDate) > String(today) ? startDate : today;
+    nextRun = computeFirstRun(anchor, day);
+  }
+
+  return {
+    is_recurring: true,
+    recurrence_amount: amountNum,
+    recurrence_day: day,
+    recurrence_start_date: startDate,
+    recurrence_end_date: endDate,
+    recurrence_next_run: nextRun,
+  };
 }
 
 function buildWhere(filters = {}, ctx) {
@@ -198,7 +286,10 @@ async function createProject(payload, ctx) {
   const baseSlug = slugify(payload.slug || payload.name);
   const slug = await ensureUniqueSlug(baseSlug);
 
-  const status = resolveStatus(payload.status) || "in_progress";
+  const recurrence = resolveRecurrence(payload) || {};
+
+  const status =
+    resolveStatus(payload.status) || (recurrence.is_recurring ? "recurring" : "in_progress");
   if (!PROJECT_STATUSES.includes(status)) {
     throw new AppError("Status inválido", 400, "VALIDATION_ERROR");
   }
@@ -228,6 +319,7 @@ async function createProject(payload, ctx) {
     ...deadline,
     budget: payload.budget ?? null,
     origin,
+    ...recurrence,
   });
 
   if (Array.isArray(payload.details) && payload.details.length > 0) {
@@ -294,6 +386,20 @@ async function updateProject(id, payload, ctx) {
       throw new AppError("Status inválido", 400, "VALIDATION_ERROR");
     }
     updates.status = status;
+  }
+
+  const recurrence = resolveRecurrence(payload, project);
+  if (recurrence) {
+    Object.assign(updates, recurrence);
+    // Mantém o status coerente ao ligar/desligar a recorrência
+    // (a menos que o próprio payload já esteja definindo o status).
+    if (payload.status === undefined) {
+      if (recurrence.is_recurring && project.status !== "recurring") {
+        updates.status = "recurring";
+      } else if (!recurrence.is_recurring && project.status === "recurring") {
+        updates.status = "in_progress";
+      }
+    }
   }
 
   if (payload.has_deadline !== undefined || payload.due_date !== undefined) {

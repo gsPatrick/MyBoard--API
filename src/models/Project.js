@@ -107,6 +107,16 @@ module.exports = (sequelize) => {
         allowNull: false,
         defaultValue: "own",
       },
+      is_recurring: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      recurrence_amount: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
+      recurrence_day: { type: DataTypes.INTEGER, allowNull: true },
+      recurrence_start_date: { type: DataTypes.DATEONLY, allowNull: true },
+      recurrence_end_date: { type: DataTypes.DATEONLY, allowNull: true },
+      recurrence_next_run: { type: DataTypes.DATEONLY, allowNull: true },
     },
     {
       sequelize,

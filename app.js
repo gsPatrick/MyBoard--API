@@ -12,6 +12,8 @@ const { sequelize } = require("./src/models");
 const { initSocket } = require("./src/providers/realtime/socket.provider");
 const { UPLOAD_ROOT } = require("./src/providers/storage/local-storage.provider");
 const { APP_TIMEZONE } = require("./src/config/constants");
+const { runMigrations } = require("./src/jobs/migrate-on-boot");
+const { startRecurrenceScheduler } = require("./src/jobs/recurrence.job");
 
 const app = express();
 const server = http.createServer(app);
@@ -44,124 +46,20 @@ app.use((_req, _res, next) => {
 
 app.use(errorHandler);
 
-async function resetUserByEmail(email) {
-  const { User } = sequelize.models;
-  const user = await User.findOne({ where: { email } });
-  if (!user) {
-    console.log(`[reset-script] Usuário ${email} não encontrado.`);
-    return;
-  }
-  const tenantId = user.tenant_id;
-  const userId = user.id;
-  console.log(`[reset-script] Encontrado usuário ${email} (ID: ${userId}) no Tenant: ${tenantId}. Iniciando reset...`);
-
-  // Deleta registros vinculados por user_id
-  const userModels = ['UserSession', 'UserActivity', 'UserPasskey', 'Notification', 'PasswordResetToken'];
-  for (const mName of userModels) {
-    if (sequelize.models[mName]) {
-      const count = await sequelize.models[mName].destroy({ where: { user_id: userId } });
-      console.log(`[reset-script] Deletados ${count} registros de ${mName}.`);
-    }
-  }
-
-  if (tenantId) {
-    const clients = await sequelize.models.Client.findAll({ where: { tenant_id: tenantId } });
-    const clientIds = clients.map(c => c.id);
-    const projects = await sequelize.models.Project.findAll({ where: { tenant_id: tenantId } });
-    const projectIds = projects.map(p => p.id);
-
-    console.log(`[reset-script] O tenant possui ${clientIds.length} clientes e ${projectIds.length} projetos.`);
-
-    if (projectIds.length) {
-      if (sequelize.models.ProjectWhatsappLink) {
-        await sequelize.models.ProjectWhatsappLink.destroy({ where: { project_id: projectIds } });
-      }
-      if (sequelize.models.ProjectFinancialEntry) {
-        await sequelize.models.ProjectFinancialEntry.destroy({ where: { project_id: projectIds } });
-      }
-      if (sequelize.models.ProjectDemand) {
-        await sequelize.models.ProjectDemand.destroy({ where: { project_id: projectIds } });
-      }
-      if (sequelize.models.ProjectDetail) {
-        await sequelize.models.ProjectDetail.destroy({ where: { project_id: projectIds } });
-      }
-      if (sequelize.models.ProjectTag) {
-        await sequelize.models.ProjectTag.destroy({ where: { project_id: projectIds } });
-      }
-      if (sequelize.models.MediaFile) {
-        await sequelize.models.MediaFile.destroy({ where: { entity_type: "project", entity_id: projectIds } });
-      }
-    }
-
-    if (clientIds.length) {
-      if (sequelize.models.ClientWhatsappLink) {
-        await sequelize.models.ClientWhatsappLink.destroy({ where: { client_id: clientIds } });
-      }
-      if (sequelize.models.ClientTag) {
-        await sequelize.models.ClientTag.destroy({ where: { client_id: clientIds } });
-      }
-      if (sequelize.models.MediaFile) {
-        await sequelize.models.MediaFile.destroy({ where: { entity_type: "client", entity_id: clientIds } });
-      }
-    }
-
-    if (sequelize.models.MediaFile) {
-      await sequelize.models.MediaFile.destroy({ where: { uploaded_by_user_id: userId } });
-    }
-
-    const tenantModels = [
-      'AgendaEvent',
-      'Board',
-      'WorkspaceFolder',
-      'AssistantChatMessage',
-      'AssistantChat',
-      'RagChunk',
-      'RagFact',
-      'RagMessageAsset',
-      'RagMessage',
-      'RagConversation',
-      'RagSummary',
-      'WhatsappInstance',
-      'Tag',
-      'Project',
-      'Client'
-    ];
-
-    for (const mName of tenantModels) {
-      if (sequelize.models[mName]) {
-        const count = await sequelize.models[mName].destroy({ where: { tenant_id: tenantId } });
-        console.log(`[reset-script] Deletados ${count} registros de ${mName}.`);
-      }
-    }
-  }
-
-  await user.update({
-    avatar_media_id: null,
-    onboarding: {
-      status: "pending",
-      step: 0,
-      version: 1,
-      completed_at: null
-    }
-  });
-
-  console.log(`[reset-script] Usuário ${email} resetado com sucesso!`);
-}
-
 async function start() {
   try {
     await sequelize.authenticate();
     console.log("PostgreSQL conectado.");
 
-    // Executa o script de reset de conta solicitado
-    try {
-      await resetUserByEmail("patricksiqueira.developer@gmail.com");
-    } catch (err) {
-      console.error("[reset-script] Falha ao resetar conta:", err.message);
-    }
+    // Garante schema atualizado mesmo rodando `node app.js` fora do docker-entrypoint.
+    await runMigrations();
 
     initSocket(server);
     console.log("Socket.io inicializado (notificações em tempo real).");
+
+    // Recorrência: catch-up no boot + verificação periódica.
+    startRecurrenceScheduler();
+    console.log("Recorrência: agendador de recebimentos iniciado.");
 
     const whatsappService = require("./src/features/whatsapp/whatsapp.service");
     whatsappService
