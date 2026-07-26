@@ -1,5 +1,13 @@
 const { Op } = require("sequelize");
-const { Project, Client, ProjectDetail, Tag, WorkspaceFolder, MediaFile } = require("../../models");
+const {
+  Project,
+  Client,
+  ProjectDetail,
+  ProjectFinancialEntry,
+  Tag,
+  WorkspaceFolder,
+  MediaFile,
+} = require("../../models");
 const AppError = require("../../utils/app-error");
 const { slugify } = require("../../utils/crypto");
 const {
@@ -258,6 +266,17 @@ async function getProjectById(id, options = {}, ctx) {
 
   if (includeDetails && project.details) {
     project.details = projectDetailsService.sanitizeDetailsForResponse(project.details);
+  }
+
+  // Quantas vezes o projeto recorrente já gerou recebimento.
+  if (project.is_recurring) {
+    const receivedCount = await ProjectFinancialEntry.count({
+      where: {
+        project_id: project.id,
+        title: { [Op.like]: "Recebimento recorrente%" },
+      },
+    });
+    project.setDataValue("recurrence_received_count", receivedCount);
   }
 
   return project;
