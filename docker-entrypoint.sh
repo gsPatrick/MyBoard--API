@@ -10,5 +10,8 @@ npx sequelize-cli db:migrate
 echo "==> Criando usuário admin (se não existir)..."
 node scripts/seed-admin.js
 
+echo "==> Criando conta de usuário (se configurada e não existir)..."
+node scripts/seed-user.js
+
 echo "==> Iniciando API..."
 exec node app.js
