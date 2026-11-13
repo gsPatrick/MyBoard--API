@@ -370,7 +370,7 @@ async function createProject(payload, ctx) {
   }
 
   // Lança o que já foi recebido com data do mês anterior: abate do "a receber"
-  // em todas as telas, mas não entra no "recebido no mês" atual.
+  // em todas as telas, mas fica fora do Lucro e do "recebido no mês".
   if (alreadyReceived > 0) {
     await projectFinancialService.createEntry(
       project.id,
@@ -381,7 +381,8 @@ async function createProject(payload, ctx) {
         description: "Valor já recebido, informado ao criar o projeto.",
         entry_date: lastDayOfPreviousMonthISO(),
       },
-      ctx
+      ctx,
+      { beforeTracking: true }
     );
   }
 

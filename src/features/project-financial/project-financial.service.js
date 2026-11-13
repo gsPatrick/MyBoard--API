@@ -122,7 +122,8 @@ async function getEntryById(projectId, entryId, ctx) {
   return entry;
 }
 
-async function createEntry(projectId, payload, ctx) {
+/** `options.beforeTracking` é só para uso interno (criação do projeto). */
+async function createEntry(projectId, payload, ctx, options = {}) {
   await ensureProjectExists(projectId, ctx);
   validateEntryPayload(payload);
 
@@ -133,6 +134,7 @@ async function createEntry(projectId, payload, ctx) {
     title: payload.title.trim(),
     description: payload.description?.trim() || null,
     entry_date: payload.entry_date,
+    before_tracking: Boolean(options.beforeTracking),
   });
 }
 

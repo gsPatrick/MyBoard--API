@@ -34,6 +34,8 @@ module.exports = (sequelize) => {
       },
       description: { type: DataTypes.TEXT, allowNull: true },
       entry_date: { type: DataTypes.DATEONLY, allowNull: false },
+      // Recebido antes do cadastro: abate do saldo, mas fica fora do Lucro.
+      before_tracking: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     {
       sequelize,
