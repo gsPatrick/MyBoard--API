@@ -52,8 +52,14 @@ function monthLabel(dateISO) {
   return dt.toFormat("LLL/yyyy");
 }
 
+/** Último dia do mês anterior (YYYY-MM-DD) no fuso do app. */
+function lastDayOfPreviousMonthISO() {
+  return DateTime.now().setZone(APP_TIMEZONE).startOf("month").minus({ days: 1 }).toISODate();
+}
+
 module.exports = {
   todayISO,
+  lastDayOfPreviousMonthISO,
   occurrenceInMonth,
   computeFirstRun,
   computeNextRun,

@@ -100,6 +100,7 @@ module.exports = (sequelize) => {
       color: { type: DataTypes.STRING(20), allowNull: true, defaultValue: "#3b82f6" },
       cover_media_id: { type: DataTypes.UUID, allowNull: true },
       start_date: { type: DataTypes.DATEONLY, allowNull: true },
+      completed_at: { type: DataTypes.DATE, allowNull: true },
       due_date: { type: DataTypes.DATEONLY, allowNull: true },
       budget: { type: DataTypes.DECIMAL(14, 2), allowNull: true },
       origin: {

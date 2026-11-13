@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const { Project, ProjectFinancialEntry } = require("../models");
 const { todayISO, computeNextRun, monthLabel } = require("../utils/recurrence");
+const { RECURRING_BILLING_STATUSES } = require("../config/constants");
 
 const RECURRENCE_TITLE_PREFIX = "Recebimento recorrente";
 
@@ -62,6 +63,7 @@ async function runRecurringBilling() {
   const projects = await Project.findAll({
     where: {
       is_recurring: true,
+      status: { [Op.in]: RECURRING_BILLING_STATUSES },
       recurrence_next_run: { [Op.lte]: today },
     },
   });

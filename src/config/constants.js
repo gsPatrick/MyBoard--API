@@ -13,6 +13,7 @@ module.exports = {
     "paused",
     "recurring",
     "maintenance",
+    "job",
   ],
   PROJECT_STATUS_LABELS: {
     draft: "Rascunho",
@@ -22,7 +23,11 @@ module.exports = {
     paused: "Pausado",
     recurring: "Recorrente",
     maintenance: "Manutenção",
+    job: "Trabalho",
   },
+  // Status em que a recorrência gera recebimentos. Pausado/cancelado/concluído
+  // param de gerar (ex.: saiu do emprego → marca o Trabalho como cancelado).
+  RECURRING_BILLING_STATUSES: ["recurring", "maintenance", "job"],
   PROJECT_PRIORITIES: ["low", "medium", "high", "critical"],
   PROJECT_ORIGINS: ["own", "99freelas", "workana"],
   PROJECT_ORIGIN_LABELS: {

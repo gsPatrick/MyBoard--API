@@ -16,9 +16,11 @@ const {
   IMPORTANCE_LEVELS,
   PROJECT_ORIGINS,
   NOTIFICATION_EVENTS,
+  RECURRING_BILLING_STATUSES,
 } = require("../../config/constants");
-const { computeFirstRun, todayISO } = require("../../utils/recurrence");
+const { computeFirstRun, todayISO, lastDayOfPreviousMonthISO } = require("../../utils/recurrence");
 const projectDetailsService = require("../project-details/project-details.service");
+const projectFinancialService = require("../project-financial/project-financial.service");
 const tagsService = require("../tags/tags.service");
 const notificationsService = require("../notifications/notifications.service");
 const activitiesService = require("../activities/activities.service");
@@ -320,6 +322,23 @@ async function createProject(payload, ctx) {
     throw new AppError("Origem do projeto inválida", 400, "VALIDATION_ERROR");
   }
 
+  // Valor já recebido antes de cadastrar o projeto (validado antes de criar).
+  let alreadyReceived = 0;
+  if (payload.already_received !== undefined && payload.already_received !== null && payload.already_received !== "") {
+    alreadyReceived = Number(payload.already_received);
+    if (!Number.isFinite(alreadyReceived) || alreadyReceived < 0) {
+      throw new AppError("Valor já recebido inválido", 400, "VALIDATION_ERROR");
+    }
+    const budgetNum = payload.budget != null && payload.budget !== "" ? Number(payload.budget) : null;
+    if (Number.isFinite(budgetNum) && alreadyReceived > budgetNum) {
+      throw new AppError(
+        "Valor já recebido não pode ser maior que o valor do projeto",
+        400,
+        "VALIDATION_ERROR"
+      );
+    }
+  }
+
   const project = await Project.create({
     tenant_id: tenantId,
     client_id: payload.client_id,
@@ -337,6 +356,7 @@ async function createProject(payload, ctx) {
     start_date: payload.start_date || null,
     ...deadline,
     budget: payload.budget ?? null,
+    completed_at: status === "completed" ? new Date() : null,
     origin,
     ...recurrence,
   });
@@ -347,6 +367,22 @@ async function createProject(payload, ctx) {
 
   if (payload.tag_ids) {
     await tagsService.syncProjectTags(project.id, payload.tag_ids, ctx);
+  }
+
+  // Lança o que já foi recebido com data do mês anterior: abate do "a receber"
+  // em todas as telas, mas não entra no "recebido no mês" atual.
+  if (alreadyReceived > 0) {
+    await projectFinancialService.createEntry(
+      project.id,
+      {
+        entry_type: "entrada",
+        amount: alreadyReceived,
+        title: "Recebido antes do cadastro",
+        description: "Valor já recebido, informado ao criar o projeto.",
+        entry_date: lastDayOfPreviousMonthISO(),
+      },
+      ctx
+    );
   }
 
   if (ctx.userId) {
@@ -414,14 +450,33 @@ async function updateProject(id, payload, ctx) {
     // (a menos que o próprio payload já esteja definindo o status —
     // caso de "recurring" vs "maintenance", que o front envia explícito).
     if (payload.status === undefined) {
-      const hadRecurringStatus =
-        project.status === "recurring" || project.status === "maintenance";
+      const hadRecurringStatus = RECURRING_BILLING_STATUSES.includes(project.status);
       if (recurrence.is_recurring && !hadRecurringStatus) {
         updates.status = "recurring";
       } else if (!recurrence.is_recurring && hadRecurringStatus) {
         updates.status = "in_progress";
       }
     }
+  }
+
+  // Data de conclusão: marca ao virar "concluído" e limpa se for reaberto.
+  if (updates.status !== undefined && updates.status !== project.status) {
+    if (updates.status === "completed") updates.completed_at = new Date();
+    else if (project.status === "completed") updates.completed_at = null;
+  }
+
+  // Retomada: projeto recorrente que estava pausado/cancelado/concluído e volta
+  // a um status que gera recebimento → re-ancora o próximo ciclo em hoje, para
+  // não lançar de uma vez os meses em que ficou parado.
+  const finalStatus = updates.status ?? project.status;
+  const finalRecurring = updates.is_recurring ?? project.is_recurring;
+  if (
+    finalRecurring &&
+    !RECURRING_BILLING_STATUSES.includes(project.status) &&
+    RECURRING_BILLING_STATUSES.includes(finalStatus)
+  ) {
+    const day = updates.recurrence_day ?? project.recurrence_day;
+    if (day) updates.recurrence_next_run = computeFirstRun(todayISO(), day);
   }
 
   if (payload.has_deadline !== undefined || payload.due_date !== undefined) {
